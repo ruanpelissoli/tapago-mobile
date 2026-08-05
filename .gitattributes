@@ -1,0 +1,16 @@
+# Normalise line endings to LF in the repository AND in the working tree.
+#
+# Go tooling assumes LF: with Windows' core.autocrlf=true, a checkout rewrites
+# every .go file to CRLF and `gofmt -l` then flags all of them as unformatted,
+# even though the committed content is clean. `eol=lf` pins the working tree to
+# LF on every platform so gofmt, go vet, and CI agree regardless of who checked
+# the repo out.
+* text=auto eol=lf
+
+# Keep binary assets byte-exact — never apply EOL conversion to these.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary

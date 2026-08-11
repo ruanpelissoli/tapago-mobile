@@ -9,14 +9,21 @@ import React, {
   type PropsWithChildren,
 } from 'react';
 
-/** Minimal shape of the signed-in user. Widened when the real API lands. */
-export type AuthUser = {
-  id: string;
-  name: string;
-};
+import type { AuthenticatedUser, AuthSession } from '../services/authService';
+
+/** The signed-in user, as returned by the API. */
+export type AuthUser = AuthenticatedUser;
 
 export type AuthState = {
   user: AuthUser | null;
+  /**
+   * The TaPago JWT for the current session, or `null` when signed out.
+   *
+   * Held in memory only — see the note on `restoreSession` below. Anything that
+   * needs to authenticate a request should read it from here rather than
+   * threading it through props.
+   */
+  token: string | null;
   /** True once a session has been restored or created. */
   isAuthenticated: boolean;
   /**
@@ -25,7 +32,12 @@ export type AuthState = {
    * signed-in user briefly bounces to the sign-in screen on every launch.
    */
   isRestoring: boolean;
-  signIn: (user: AuthUser) => void;
+  /**
+   * Complete a sign-in. Takes the whole session so the token and the user can
+   * never disagree about who is signed in — every auth path (email/password,
+   * Google, Apple) funnels through this one function.
+   */
+  signIn: (session: AuthSession) => void;
   signOut: () => void;
 };
 
@@ -34,12 +46,13 @@ const AuthContext = createContext<AuthState | undefined>(undefined);
 /**
  * Auth state for the app.
  *
- * This milestone ships an in-memory implementation only — there is no token
- * storage or network call yet. `restoreSession` is the single seam a later task
- * swaps for a real `expo-secure-store` read, so nothing else has to change.
+ * The session (user + JWT) is held **in memory only**. `restoreSession` is the
+ * single seam a later task swaps for a real `expo-secure-store` read, so
+ * nothing else has to change when persistence lands; until then every cold
+ * start begins signed out.
  */
 export function AuthProvider({ children }: PropsWithChildren) {
-  const [user, setUser] = useState<AuthUser | null>(null);
+  const [session, setSession] = useState<AuthSession | null>(null);
   const [isRestoring, setIsRestoring] = useState(true);
   const isMounted = useRef(true);
 
@@ -48,10 +61,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
     async function restoreSession() {
       // Placeholder: no persisted session exists yet.
-      const restored: AuthUser | null = null;
+      const restored: AuthSession | null = null;
       // Guard against setting state after unmount (fast reload / process death).
       if (!isMounted.current) return;
-      setUser(restored);
+      setSession(restored);
       setIsRestoring(false);
     }
 
@@ -62,18 +75,19 @@ export function AuthProvider({ children }: PropsWithChildren) {
     };
   }, []);
 
-  const signIn = useCallback((nextUser: AuthUser) => setUser(nextUser), []);
-  const signOut = useCallback(() => setUser(null), []);
+  const signIn = useCallback((nextSession: AuthSession) => setSession(nextSession), []);
+  const signOut = useCallback(() => setSession(null), []);
 
   const value = useMemo<AuthState>(
     () => ({
-      user,
-      isAuthenticated: user !== null,
+      user: session?.user ?? null,
+      token: session?.token ?? null,
+      isAuthenticated: session !== null,
       isRestoring,
       signIn,
       signOut,
     }),
-    [user, isRestoring, signIn, signOut],
+    [session, isRestoring, signIn, signOut],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

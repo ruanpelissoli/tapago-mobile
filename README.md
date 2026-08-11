@@ -36,8 +36,8 @@ app/                    # Routes — the directory tree IS the navigation graph
   +not-found.tsx
 src/
   components/           # Shared presentational UI
-  hooks/                # useAuth (React Context; no state library yet)
-  services/             # env config; API client lands here
+  hooks/                # useAuth (React Context), useGoogleSignIn
+  services/             # env config, apiClient, authService
   theme/                # Colours, spacing, type scale
 app.json                # Static Expo config (app name, icons, plugins)
 app.config.ts           # Dynamic config — injects env values into `extra`
@@ -47,17 +47,44 @@ Each directory above has a `CLAUDE.md` with the decisions and gotchas behind it.
 
 ## Configuration
 
-`API_BASE_URL` flows from `.env` → `app.config.ts` → `expo-constants` → `src/services/env.ts`.
+Config flows from `.env` → `app.config.ts` → `expo-constants` → `src/services/env.ts`.
+
+| Variable | Purpose |
+| --- | --- |
+| `EXPO_PUBLIC_API_BASE_URL` | Backend base URL, no trailing slash |
+| `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID` | Google OAuth client ID for iOS |
+| `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID` | Google OAuth client ID for Android |
+| `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` | Google OAuth "web application" client ID |
 
 Only `EXPO_PUBLIC_`-prefixed variables reach the app, and they are **inlined into the
 shipped bundle** — never put secrets in `.env`. Changing `.env` needs a restart with a
 cleared cache: `npx expo start --clear`.
 
+The Google client IDs are public identifiers rather than secrets, but each one must also
+appear in the backend's `GOOGLE_CLIENT_IDS` — it becomes the ID token's `aud` claim, and
+the API rejects an audience it doesn't recognise. Leave them blank to hide the Google
+button.
+
+## Sign-in
+
+`(auth)/sign-in.tsx` offers Google and Apple sign-in. Each provider SDK runs its own
+OAuth flow and returns an ID token, which the app exchanges at `POST /auth/google` or
+`POST /auth/apple` for a TaPago JWT.
+
+Both need native configuration, so **social sign-in does not work in Expo Go** — use a
+development build (`npx expo run:ios` / `run:android`). Apple Sign-In additionally
+requires the entitlement enabled by `ios.usesAppleSignIn`, and its button is rendered
+only on iOS 13+, per Apple's guidelines.
+
 ## Current state
 
-Navigation shell only. `sign-in` and `home` are text stubs, and auth state is in-memory,
-so the app starts signed out on every launch. Real credentials, token persistence and
-the dashboard land in follow-up tasks.
+Sign-in works end to end against the API, but the session is **in-memory only** — nothing
+is persisted, so the app starts signed out on every launch. Email/password credentials,
+token persistence (`expo-secure-store`) and the dashboard land in follow-up tasks;
+`home` is still a stub.
+
+There is no test runner in this project yet. `npm run typecheck` and `npm run lint` are
+the checks that exist; both must pass.
 
 ## Notes
 

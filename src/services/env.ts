@@ -29,8 +29,48 @@ export const API_BASE_URL = readString(
   'http://localhost:5000',
 ).replace(/\/+$/, '');
 
+/**
+ * Google OAuth client IDs.
+ *
+ * Public client identifiers, not secrets — Google requires them in the app, and
+ * the flow is secured by PKCE and the registered redirect URI. An empty string
+ * means "not configured for this platform", which hides the Google button
+ * rather than failing at prompt time. See `GOOGLE_SIGN_IN_ENABLED`.
+ */
+export const GOOGLE_IOS_CLIENT_ID = readString(
+  'googleIosClientId',
+  process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
+  '',
+);
+
+export const GOOGLE_ANDROID_CLIENT_ID = readString(
+  'googleAndroidClientId',
+  process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID,
+  '',
+);
+
+export const GOOGLE_WEB_CLIENT_ID = readString(
+  'googleWebClientId',
+  process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
+  '',
+);
+
+/**
+ * Whether any Google client ID is configured at all.
+ *
+ * Deliberately *not* per-platform: `expo-auth-session` falls back to the web
+ * client ID when a native one is missing (that is the documented Expo Go path),
+ * so a single configured ID is enough to attempt the flow.
+ */
+export const GOOGLE_SIGN_IN_ENABLED =
+  GOOGLE_IOS_CLIENT_ID !== '' || GOOGLE_ANDROID_CLIENT_ID !== '' || GOOGLE_WEB_CLIENT_ID !== '';
+
 export const env = {
   apiBaseUrl: API_BASE_URL,
+  googleIosClientId: GOOGLE_IOS_CLIENT_ID,
+  googleAndroidClientId: GOOGLE_ANDROID_CLIENT_ID,
+  googleWebClientId: GOOGLE_WEB_CLIENT_ID,
+  googleSignInEnabled: GOOGLE_SIGN_IN_ENABLED,
 } as const;
 
 export default env;

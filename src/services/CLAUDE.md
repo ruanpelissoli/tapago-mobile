@@ -8,6 +8,8 @@ device storage.
 - `apiClient.ts` — thin JSON transport over `fetch`.
 - `authService.ts` — sign-in against the API, including social token exchange.
 - `sessionStorage.ts` — persists the auth session to `expo-secure-store`.
+- `bets.ts` — create and read the user's one in-flight bet.
+- `paymentMethods.ts` — save and list tokenised cards.
 
 ## env.ts
 
@@ -61,7 +63,8 @@ and layers on the environment-derived `extra` block.
 ## apiClient.ts
 
 ### Purpose
-`postJson(path, body, signal)` — the one way this app talks to the API.
+`postJson(path, body, signalOrOptions)` and `getJson(path, signalOrOptions)` — the one
+way this app talks to the API. Also owns the `Authorization` header.
 
 ### Key decisions
 - **`fetch`, not axios.** A handful of calls, no interceptor or retry needs; a client
@@ -69,23 +72,39 @@ and layers on the environment-derived `extra` block.
 - **Two error types, split by what the user should be told.** `ApiError` carries an HTTP
   `status` plus the API's machine-readable `error` string; `NetworkError` means the round
   trip failed. "The server said no" and "you're offline" need different copy, and callers
-  shouldn't have to sniff messages to tell them apart.
+  shouldn't have to sniff messages to tell them apart. `NetworkError.status` is `0`, so
+  *every* thrown error uniformly has `status` + `message`, but the two stay **separate
+  classes**: making `NetworkError` extend `ApiError` would make the several
+  `instanceof ApiError` status switches silently start matching offline failures.
+  `ApiFailure` is the exported union for typing a catch.
+- **The token arrives via a registered getter, not a parameter.** `setAuthTokenProvider`
+  takes a `() => string | null` that `useAuth.tsx` registers at import time. A hook can't
+  be read from a plain module, and a captured *value* would go stale on sign-in, sign-out
+  and restore — hence a getter. Call sites just pass `auth: true`.
+- **An authenticated call with no token throws `ApiError(401, 'not_authenticated')`
+  before the network.** Being signed out at that point is a wiring bug (a screen rendered
+  outside the auth guard); spending a user's connection to be told 401 helps nobody.
 - **This layer never produces user-facing text.** It reports what happened; mapping to
-  copy is `authService.describeSocialAuthError`'s job. Keeping that split means one place
-  to review the wording.
+  copy is each service's `describe*Error` job. One place per domain owns the wording.
 - **Every request has a 15s timeout**, combined with any caller-supplied `AbortSignal`,
-  so a hung socket cannot leave a screen spinning forever.
+  so a hung socket cannot leave a screen spinning forever. `timeoutMs` overrides it for
+  a known-slow endpoint (`createBet` uses 30s for the provider round trip).
 
 ### Business logic / invariants
 - A non-2xx reply always throws — success paths never have to check `response.ok`.
 - A 2xx body that is not valid JSON is a `NetworkError`: from the caller's side the round
   trip did not deliver, whatever the status line said.
+- `GET` sends no body and no `Content-Type`.
 
 ### Gotchas
 - The timeout aborts through the same controller as the caller's signal, so a caller
   cannot distinguish "I cancelled" from "it timed out" — both surface as `NetworkError`.
-- No `Authorization` header is attached yet. When authenticated endpoints land, add it
-  here from the auth context rather than at each call site.
+- The third argument accepts **either** a bare `AbortSignal` (the original shape, still
+  used by `authService`) or a `RequestOptions` object. The discrimination is structural
+  (`typeof value.aborted === 'boolean'`), not `instanceof`, because `AbortSignal` is a
+  runtime polyfill on React Native.
+- Auth routes are unprefixed (`/auth/google`) while the rest are `/v1/…`. Not a typo —
+  both are as contracted.
 
 ## authService.ts
 
@@ -152,9 +171,11 @@ app restart. `AUTH_SESSION_KEY`, `parseStoredSession`, `loadStoredSession`,
 - **This module never rejects.** Storage being unavailable is not a reason to fail a
   sign-in or strand the app on a splash screen. Callers treat it as best-effort; a
   failure degrades to in-memory-only behaviour for the life of the process.
-- **Restore is optimistic — expiry is not checked and the JWT is not decoded.** Nothing
-  attaches an `Authorization` header yet, so a restored-but-expired token costs nothing.
-  Clearing on a `401` is a later task.
+- **Restore is optimistic — expiry is not checked and the JWT is not decoded.** Requests
+  *do* carry the token now, so a restored-but-expired one surfaces as a `401` from
+  `bets.ts` / `paymentMethods.ts`. Clearing the session on a `401` is still a later task;
+  until it lands, the user sees "your session has expired" copy but stays nominally
+  signed in.
 - **`parseStoredSession` is pure and exported**, so it is the first thing covered when a
   test runner lands.
 
@@ -181,3 +202,78 @@ app restart. `AUTH_SESSION_KEY`, `parseStoredSession`, `loadStoredSession`,
   will not have it; rebuild, and restart the bundler with `npx expo start --clear`.
 - `app.json` `platforms` is `["ios", "android"]`, so there is no web fallback here. Adding
   web would need one — `SecureStore` is unavailable in a browser.
+
+## bets.ts
+
+### Purpose
+`createBet(params, signal?)`, `getActiveBet(signal?)`, plus the pure exported `parseBet`
+and the copy mapper `describeBetError`.
+
+### Key decisions
+- **`stakeAmountBrl` is a `string`, and must stay one.** The API sends exact centavos as
+  text (`"50.00"`) and takes it back the same way. Parsing money into a binary float
+  introduces rounding error into the one field a user will absolutely notice. Format for
+  display; never do arithmetic on it.
+- **404 → `null` from `getActiveBet`, not a throw.** "No active bet" is a normal state,
+  and making every screen try/catch a normal state is how error handling rots. Every
+  other status still throws.
+- **Snake_case JSON is parsed into camelCase domain types, not cast.** Same rule as
+  `parseAuthSession`/`parseStoredSession`. Field-for-field fidelity is kept; only the
+  casing at the TS boundary differs, and requests serialise back to snake_case here.
+- **`goalType` and `status` are validated against their literal unions.** An unfamiliar
+  value from a future API version fails loudly here instead of leaking into a screen's
+  `switch` and silently rendering nothing.
+- **30s timeout on `createBet`.** It triggers an outbound Mercado Pago pre-authorisation
+  that regularly outlasts the default 15s.
+
+### Business logic / invariants
+- A user holds **at most one in-flight bet** (`pending` or `active`); the API enforces it
+  with a partial unique index and answers `409` to a second attempt.
+- `pending` is deliberately treated as in-flight: a bet stranded by a provider outage
+  still occupies the user's slot, and hiding it would let them try to open a second.
+- Error copy is exhaustive by status: 402 is specifically *card declined*, 409 is
+  *you already have a bet*. Neither may be flattened into a generic failure message.
+
+### Dependencies
+`apiClient.ts` only. Intended consumers are the bet-creation and dashboard screens.
+
+### Gotchas
+- **`createBet` is not idempotent — never blind-retry it.** A `503` leaves the bet
+  `pending` server-side, and a `pending` bet occupies the slot, so retrying returns `409`
+  rather than a new bet. Same after a client timeout or abort: the server may have
+  created it anyway, since aborting the fetch cancels nothing server-side. The correct
+  recovery on any of those is `getActiveBet()` to reconcile.
+- **404 → `null` is slightly lossy.** A misconfigured `API_BASE_URL` or a renamed route
+  also 404s and would read as "no active bet". If the dashboard insists there is no bet,
+  check the base URL before the data.
+
+## paymentMethods.ts
+
+### Purpose
+`addPaymentMethod(params, signal?)`, `listPaymentMethods(signal?)`, the pure exported
+`parsePaymentMethod`/`parsePaymentMethodList`, and `describePaymentMethodError`.
+
+### Key decisions
+- **Tokenised card data only — never a raw PAN, expiry or CVV.** The Mercado Pago SDK
+  collects the card and returns a single-use token; only that token plus the last four
+  digits and the brand ever enter this app. This is what keeps the Expo bundle (and the
+  team) out of PCI scope. **Do not add a raw card field to `AddPaymentMethodParams`**,
+  however convenient it looks at a call site.
+- **Server order is preserved.** The API returns `is_default DESC, created_at DESC`;
+  re-sorting client-side would stop the default card appearing first.
+- **An empty list is a result, not an error.** A user with no saved cards is a state to
+  render, and the `payment_methods` array is always present.
+
+### Business logic / invariants
+- `parsePaymentMethod` requires `is_default` to be a real boolean. A missing one reaching
+  a screen would silently render every card as non-default — worse than a visible failure.
+- Responses never contain `mp_card_token` or `mp_customer_id`; nothing here reads them.
+
+### Dependencies
+`apiClient.ts` only. Intended consumers are the card-management and bet-creation screens.
+
+### Gotchas
+- `addPaymentMethod` can return `503` when the provider is unavailable — distinct from a
+  validation `400`, and the user should be told to retry rather than fix their card.
+- The card token is single-use. A failed `addPaymentMethod` cannot be retried with the
+  same token; the screen must re-collect through the SDK.

@@ -39,7 +39,8 @@ src/
   components/           # Shared presentational UI
   domain/               # Bet rules: goal-type enum, bounds, input parsing (pure)
   hooks/                # useAuth (React Context), useGoogleSignIn
-  services/             # env config, apiClient, authService, sessionStorage
+  services/             # env config, apiClient, authService, sessionStorage,
+                        #   bets, paymentMethods
   theme/                # Colours, spacing, type scale
 app.json                # Static Expo config (app name, icons, plugins)
 app.config.ts           # Dynamic config — injects env values into `extra`
@@ -82,10 +83,22 @@ only on iOS 13+, per Apple's guidelines.
 
 Sign-in works end to end against the API and the session **persists across restarts** —
 the JWT and user are stored in `expo-secure-store` and restored on cold start, so a
-signed-in user stays signed in. The restore is optimistic: token expiry is not checked,
-and no request attaches an `Authorization` header yet. Email/password credentials,
-`401`-driven sign-out and the dashboard land in follow-up tasks; `home` is still a stub —
-it exists to offer a "Create bet" button.
+signed-in user stays signed in.
+
+Requests now **authenticate themselves**. `AuthProvider` registers a token getter with
+`apiClient`, which attaches `Authorization: Bearer …` to any call made with `auth: true`
+— no screen ever handles the JWT. On top of that sit two typed service modules:
+
+| Module | Functions | Endpoints |
+| --- | --- | --- |
+| `src/services/bets.ts` | `createBet`, `getActiveBet` | `POST /v1/bets`, `GET /v1/bets/active` |
+| `src/services/paymentMethods.ts` | `addPaymentMethod`, `listPaymentMethods` | `POST` / `GET /v1/payment-methods` |
+
+Both parse (never cast) the API's JSON, take an optional `AbortSignal`, and throw
+`ApiError` (with `status`) or `NetworkError`. `getActiveBet()` returns `null` rather than
+throwing when the user has no bet — that is a normal state. Money stays a `string`
+(`"50.00"`); do not parse it into a `number`. `createBet` is **not idempotent** — after a
+`503`, timeout or abort, reconcile with `getActiveBet()` instead of retrying.
 
 **Create bet** is at step 1: `(app)/create-bet.tsx` collects a goal type, a target-day
 count (1–365, default 30) and a BRL stake (R$ 1,00 – R$ 1.000,00, comma or dot accepted),
@@ -93,6 +106,9 @@ validates locally, and passes the values to `(app)/create-bet-payment.tsx` as ro
 with money as integer centavos. That payment screen is a **stub** that echoes what it
 received — real card selection and the `POST /v1/bets` call are a follow-up task. The rules
 live in `src/domain/` and are deliberately pure.
+
+Email/password credentials, `401`-driven sign-out and the dashboard land in follow-up
+tasks; `home` is still a stub.
 
 There is no test runner in this project yet. `npm run typecheck` and `npm run lint` are
 the checks that exist; both must pass.

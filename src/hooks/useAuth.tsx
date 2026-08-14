@@ -9,6 +9,7 @@ import React, {
   type PropsWithChildren,
 } from 'react';
 
+import { setAuthTokenProvider } from '../services/apiClient';
 import type { AuthenticatedUser, AuthSession } from '../services/authService';
 import {
   clearStoredSession,
@@ -46,6 +47,35 @@ export type AuthState = {
 };
 
 const AuthContext = createContext<AuthState | undefined>(undefined);
+
+/**
+ * The current session's JWT, mirrored outside React so `apiClient` can attach
+ * an `Authorization` header without being a context consumer.
+ *
+ * `useAuth` is a hook and `apiClient` is a plain module, so the token cannot be
+ * read from context there. This module-scoped mirror is the seam. It is a
+ * *module* value rather than a ref for two reasons:
+ *
+ * 1. The getter is registered at import time, before any component renders, so
+ *    there is no window in which a screen's mount effect (React runs child
+ *    effects before parent ones) could fire a request with no token registered.
+ * 2. Writing a ref during render is forbidden by the `react-hooks/refs` lint
+ *    rule, and every write below happens in an event handler or async callback.
+ *
+ * Safe because exactly one `AuthProvider` is ever mounted (`app/_layout.tsx`).
+ * Mounting a second one would have them fight over this value.
+ */
+let currentToken: string | null = null;
+
+/** Keep the mirror in step with a session change. Never call during render. */
+function rememberToken(session: AuthSession | null): void {
+  currentToken = session?.token ?? null;
+}
+
+// Registered once, at import time. A getter rather than a value: the token
+// changes on sign-in, sign-out and cold-start restore, and a captured string
+// would go stale on all three.
+setAuthTokenProvider(() => currentToken);
 
 /**
  * Auth state for the app.
@@ -89,6 +119,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         const restored = await loadStoredSession();
         // Guard against setting state after unmount (fast reload / process death).
         if (!isMounted.current || hasUserActed.current) return;
+        rememberToken(restored);
         setSession(restored);
       } finally {
         // In a `finally` so no failure path can leave the app on the splash
@@ -109,6 +140,9 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const signIn = useCallback(
     (nextSession: AuthSession) => {
       hasUserActed.current = true;
+      // Before the state flip: the redirect it triggers can mount a screen that
+      // fetches immediately, and that request needs the token already in place.
+      rememberToken(nextSession);
       setSession(nextSession);
       enqueueWrite(() => saveStoredSession(nextSession));
     },
@@ -117,6 +151,9 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
   const signOut = useCallback(() => {
     hasUserActed.current = true;
+    // Cleared first, so an in-flight screen cannot start a request with the
+    // token of a user who has just signed out.
+    rememberToken(null);
     setSession(null);
     enqueueWrite(clearStoredSession);
   }, [enqueueWrite]);

@@ -34,6 +34,21 @@ Reusable stateful logic.
   have no ordering guarantee otherwise, and the loser could be the last value written.
 - **`hasUserActed` ref guards the restore.** A `signOut` (or `signIn`) while the cold-start
   read is still in flight must not be undone when that read resolves.
+- **The JWT is mirrored to a module-scoped `currentToken`, and `apiClient` reads it
+  through a getter registered at import time.** `apiClient` is a plain module and cannot
+  consume React context, so something has to bridge the two. Three alternatives were
+  rejected:
+  - *Passing the token per call site* — `src/services/CLAUDE.md` explicitly requires the
+    header to be attached in `apiClient`, not threaded through every caller.
+  - *A ref written during render* — forbidden by the `react-hooks/refs` lint rule (the
+    React Compiler's), which fails `npm run lint`.
+  - *Registering the getter in a `useEffect`* — React runs **child** effects before
+    **parent** effects, so a screen fetching from its own mount effect would run before
+    `AuthProvider`'s effect and hit the "no token registered" path. Registering at import
+    time removes that window entirely.
+
+  A *getter*, not a captured value: the token changes on sign-in, sign-out and restore,
+  and a snapshot would go stale on all three.
 
 ### Business logic / invariants
 - `isAuthenticated` is derived strictly from `user !== null`. Never set it independently
@@ -47,10 +62,19 @@ Reusable stateful logic.
   deps (only the stable `enqueueWrite`) so the memo identity survives re-renders.
 - Auth state, not the store, is the source of truth. A read/write failure is swallowed
   and the session simply lives for this process only.
+- **`rememberToken` is called on every path that changes the session** — `signIn`,
+  `signOut` and the cold-start restore — and always *before* `setSession`. Sign-in flips
+  auth state, which triggers the guard's redirect, which can mount a screen that fetches
+  immediately; that request needs the token already in place. On sign-out the ordering
+  matters for the opposite reason: no request may go out carrying the token of a user who
+  has just left. Adding a fourth way to set `session` without calling `rememberToken`
+  silently desynchronises the API client from the UI.
 
 ### Dependencies
-React, plus `src/services/sessionStorage.ts` for persistence. Consumed by
-`app/_layout.tsx` (mounts the provider) and both group layouts.
+React, plus `src/services/sessionStorage.ts` for persistence and
+`src/services/apiClient.ts` for `setAuthTokenProvider`. Consumed by `app/_layout.tsx`
+(mounts the provider) and both group layouts. The import direction is one-way —
+`apiClient` must never import this file, or the two become a cycle.
 
 ### Gotchas
 - **The session is persisted** to `expo-secure-store` under `auth_session` — the whole
@@ -62,6 +86,12 @@ React, plus `src/services/sessionStorage.ts` for persistence. Consumed by
 - The `isMounted` ref guards against setting state after unmount during Fast Refresh —
   the restore is genuinely async now, so removing it reintroduces the warning.
 - File is `.tsx`, not `.ts` — it returns JSX from the provider.
+- **`currentToken` is module state, so exactly one `AuthProvider` may ever be mounted**
+  (it is, in `app/_layout.tsx`). A second provider would fight over the same value and
+  the last write would win regardless of which tree made it.
+- Token *expiry* is still unchecked. A restored-but-expired JWT is now actually sent, so
+  it surfaces as a `401` from the service layer. Clearing the session on `401` remains a
+  follow-up task — this file does not react to API failures at all today.
 
 ## useGoogleSignIn.ts
 

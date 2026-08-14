@@ -39,6 +39,10 @@ without appearing in the URL. `app/(app)/home.tsx` is reachable at `/home`.
   entry point into the create-bet flow. The dashboard task replaces all of it.
 - A screen under `(app)/` is reachable purely by existing, but it needs a `Stack.Screen`
   entry in `(app)/_layout.tsx` to get a themed header and a title.
+- **Authenticated API calls belong in `(app)/`, behind the guard.** Calling one while
+  signed out throws `ApiError(401, 'not_authenticated')` from `apiClient` before any
+  network request — deliberately, so the mistake is loud. That is a routing bug to fix,
+  not an error to display.
 
 ## (auth)/sign-in.tsx
 
@@ -114,7 +118,10 @@ a follow-up task.
   read back on cold start (`src/services/sessionStorage.ts`). This is exactly why every
   guard must check `isRestoring` first — the read is async, so `isAuthenticated` is `false`
   but meaningless for the first frames. The token is *not* validated or expiry-checked on
-  restore; nothing sends an `Authorization` header yet.
+  restore, but authenticated requests **do** now carry it: `AuthProvider` registers a
+  token getter with `src/services/apiClient.ts`, so `bets.ts`/`paymentMethods.ts` attach
+  it automatically. A restored-but-expired token therefore shows up as a `401` from a
+  screen's first fetch; clearing the session on `401` is still a follow-up task.
 - Adding a native module (as `expo-secure-store` was) needs the bundler restarted with
   `npx expo start --clear`, and a dev client built before it was added must be rebuilt.
 - **Social sign-in cannot work in Expo Go on a device without native config.** Apple

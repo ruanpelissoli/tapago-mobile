@@ -33,9 +33,11 @@ app/                    # Routes — the directory tree IS the navigation graph
   index.tsx             #   Entry redirect, based on auth state
   (auth)/sign-in.tsx    #   Unauthenticated screens
   (app)/home.tsx        #   Authenticated screens, behind the auth guard
+  (app)/create-bet.tsx  #   Create-bet step 1 (+ create-bet-payment.tsx stub)
   +not-found.tsx
 src/
   components/           # Shared presentational UI
+  domain/               # Bet rules: goal-type enum, bounds, input parsing (pure)
   hooks/                # useAuth (React Context), useGoogleSignIn
   services/             # env config, apiClient, authService, sessionStorage,
                         #   bets, paymentMethods
@@ -98,8 +100,15 @@ throwing when the user has no bet — that is a normal state. Money stays a `str
 (`"50.00"`); do not parse it into a `number`. `createBet` is **not idempotent** — after a
 `503`, timeout or abort, reconcile with `getActiveBet()` instead of retrying.
 
-No screen calls these yet. Email/password credentials, `401`-driven sign-out and the
-dashboard land in follow-up tasks; `home` is still a stub.
+**Create bet** is at step 1: `(app)/create-bet.tsx` collects a goal type, a target-day
+count (1–365, default 30) and a BRL stake (R$ 1,00 – R$ 1.000,00, comma or dot accepted),
+validates locally, and passes the values to `(app)/create-bet-payment.tsx` as router params
+with money as integer centavos. That payment screen is a **stub** that echoes what it
+received — real card selection and the `POST /v1/bets` call are a follow-up task. The rules
+live in `src/domain/` and are deliberately pure.
+
+Email/password credentials, `401`-driven sign-out and the dashboard land in follow-up
+tasks; `home` is still a stub.
 
 There is no test runner in this project yet. `npm run typecheck` and `npm run lint` are
 the checks that exist; both must pass.

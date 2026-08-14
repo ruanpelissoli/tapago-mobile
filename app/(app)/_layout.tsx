@@ -37,6 +37,8 @@ export default function AppLayout() {
       }}
     >
       <Stack.Screen name="home" options={{ title: 'TaPago' }} />
+      <Stack.Screen name="create-bet" options={{ title: 'New Bet' }} />
+      <Stack.Screen name="create-bet-payment" options={{ title: 'Payment Method' }} />
     </Stack>
   );
 }

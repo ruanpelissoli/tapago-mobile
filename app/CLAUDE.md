@@ -10,7 +10,9 @@ React Navigation stack anywhere in this project.
   `AuthProvider`, then a headerless `Stack`. Every provider the app needs lives here.
 - `index.tsx` — entry route. Redirects to the right group once auth state settles.
 - `(auth)/` — unauthenticated screens. Currently `sign-in.tsx`.
-- `(app)/` — authenticated screens, gated by `(app)/_layout.tsx`. Currently `home.tsx`.
+- `(app)/` — authenticated screens, gated by `(app)/_layout.tsx`: `home.tsx`,
+  `create-bet.tsx` (step 1 of the create-bet flow) and `create-bet-payment.tsx` (step 2,
+  currently a stub).
 - `+not-found.tsx` — catch-all for unmatched routes and bad deep links.
 
 Parenthesised segments are **route groups**: they organise files and scope a layout
@@ -33,7 +35,10 @@ without appearing in the URL. `app/(app)/home.tsx` is reachable at `/home`.
   `SplashScreenFallback` until restore settles.
 - Redirect targets use group-qualified hrefs (`/(app)/home`, `/(auth)/sign-in`) so the
   destination group's layout — and therefore its guard — is unambiguous.
-- `home.tsx` is still a **text-only stub**; real UI lands in the dashboard task.
+- `home.tsx` is still a **stub** — a heading plus a "Create bet" button that is the only
+  entry point into the create-bet flow. The dashboard task replaces all of it.
+- A screen under `(app)/` is reachable purely by existing, but it needs a `Stack.Screen`
+  entry in `(app)/_layout.tsx` to get a themed header and a title.
 
 ## (auth)/sign-in.tsx
 
@@ -57,10 +62,46 @@ Offers Google and Apple sign-in. Both providers converge on one funnel
 - The screen can unmount mid-flow, so the result handler checks an `isMounted` ref before
   setting state.
 
+## (app)/create-bet.tsx — step 1 of the create-bet flow
+
+Collects a goal type, a target-day count and a BRL stake, then hands them to the payment
+step. **No network call happens here**; all rules live in `src/domain/bet.ts` and
+`src/domain/betForm.ts` so this file stays layout and wiring.
+
+- **`ScreenContainer` does not scroll**, so this screen brings its own
+  `KeyboardAvoidingView` + `ScrollView`. Continue sits at the end of the scrolled content
+  rather than pinned to the bottom — that avoids needing a `keyboardVerticalOffset` tied
+  to the header height (and avoids importing `@react-navigation/elements`, which is only
+  a transitive dependency and not in `package.json`).
+- **Validity is derived on every render, never stored.** `parseTargetDays` /
+  `parseStakeCents` are called inline and `isValid` falls out of them, so clearing a field
+  returns cleanly to the disabled state with no cached flag to desync.
+- **No default goal selection** (a bet's goal must be a deliberate choice), but target
+  days defaults to `30`. The unselected group shows a muted *hint*, not an error: nothing
+  can "touch" a radio group, so a red state there could never fire honestly.
+- **Errors appear only after blur** (`touched` per field), so typing the first character
+  of an incomplete value never turns the form red.
+- **`handleContinue` re-checks all three values** rather than relying on the `disabled`
+  prop — that re-check is also what narrows the nullable parses for TypeScript, which
+  makes an unguarded push a compile error.
+- **Double-tap guard**: a `hasNavigated` ref set before `router.push`, reset in
+  `useFocusEffect` so returning from step 2 re-arms the button instead of leaving it dead.
+- No async work happens on this screen, so there is no set-state-after-unmount path and no
+  `isMounted` ref is needed (unlike `sign-in.tsx`, which awaits a provider SDK).
+
+**Param contract with `create-bet-payment.tsx`**: `goalType` (the raw `goal_type` value),
+`targetDays` and `stakeCents` — money as **integer centavos**, so no float ever represents
+an amount. Params serialise to `string | string[]`, so the stub re-parses and re-validates
+every one instead of trusting them; a bad deep link renders "Not provided", never `NaN`.
+The payment screen is a **deliberate stub** — real card selection and `POST /v1/bets` are
+a follow-up task.
+
 ## Dependencies
+- `src/domain/bet`, `src/domain/betForm` — goal-type enum, bounds, parsing/formatting.
 - `src/hooks/useAuth` — the `AuthProvider`/`useAuth` pair both guards read.
 - `src/hooks/useGoogleSignIn`, `src/services/authService` — the two social sign-in flows.
-- `src/components/ScreenContainer`, `SplashScreenFallback`, `SocialSignInButton`
+- `src/components/ScreenContainer`, `SplashScreenFallback`, `SocialSignInButton`,
+  `PrimaryButton`
 - `src/theme` — all colour/type values; no literals in route files.
 
 ## Gotchas

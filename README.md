@@ -33,9 +33,11 @@ app/                    # Routes — the directory tree IS the navigation graph
   index.tsx             #   Entry redirect, based on auth state
   (auth)/sign-in.tsx    #   Unauthenticated screens
   (app)/home.tsx        #   Authenticated screens, behind the auth guard
+  (app)/create-bet.tsx  #   Create-bet step 1 (+ create-bet-payment.tsx stub)
   +not-found.tsx
 src/
   components/           # Shared presentational UI
+  domain/               # Bet rules: goal-type enum, bounds, input parsing (pure)
   hooks/                # useAuth (React Context), useGoogleSignIn
   services/             # env config, apiClient, authService, sessionStorage
   theme/                # Colours, spacing, type scale
@@ -82,7 +84,15 @@ Sign-in works end to end against the API and the session **persists across resta
 the JWT and user are stored in `expo-secure-store` and restored on cold start, so a
 signed-in user stays signed in. The restore is optimistic: token expiry is not checked,
 and no request attaches an `Authorization` header yet. Email/password credentials,
-`401`-driven sign-out and the dashboard land in follow-up tasks; `home` is still a stub.
+`401`-driven sign-out and the dashboard land in follow-up tasks; `home` is still a stub —
+it exists to offer a "Create bet" button.
+
+**Create bet** is at step 1: `(app)/create-bet.tsx` collects a goal type, a target-day
+count (1–365, default 30) and a BRL stake (R$ 1,00 – R$ 1.000,00, comma or dot accepted),
+validates locally, and passes the values to `(app)/create-bet-payment.tsx` as router params
+with money as integer centavos. That payment screen is a **stub** that echoes what it
+received — real card selection and the `POST /v1/bets` call are a follow-up task. The rules
+live in `src/domain/` and are deliberately pure.
 
 There is no test runner in this project yet. `npm run typecheck` and `npm run lint` are
 the checks that exist; both must pass.

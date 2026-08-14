@@ -9,7 +9,8 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.tapago.mobile"
+      "bundleIdentifier": "com.tapago.mobile",
+      "usesAppleSignIn": true
     },
     "android": {
       "package": "com.tapago.mobile",
@@ -22,7 +23,7 @@
       "predictiveBackGestureEnabled": false
     },
     "platforms": ["ios", "android"],
-    "plugins": ["expo-router"],
+    "plugins": ["expo-router", "expo-apple-authentication", "expo-web-browser"],
     "experiments": {
       "typedRoutes": true
     }

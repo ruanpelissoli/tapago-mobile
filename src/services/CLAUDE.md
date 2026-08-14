@@ -1,13 +1,17 @@
 # src/services/ — app services and configuration
 
 ## Purpose
-Non-UI infrastructure: environment config now, API client and storage later.
+Non-UI infrastructure: environment config, the API transport, and authentication.
+
+- `env.ts` — runtime configuration resolved from `.env`.
+- `apiClient.ts` — thin JSON transport over `fetch`.
+- `authService.ts` — sign-in against the API, including social token exchange.
 
 ## env.ts
 
 ### Purpose
-Resolves runtime configuration into typed constants. `API_BASE_URL` is the one value
-that exists today.
+Resolves runtime configuration into typed constants: `API_BASE_URL` and the three Google
+OAuth client IDs.
 
 ### How the value flows
 `.env` → `app.config.ts` (`extra.apiBaseUrl`) → app manifest → `expo-constants` → here.
@@ -27,6 +31,11 @@ and layers on the environment-derived `extra` block.
   `` `${API_BASE_URL}/v1/foo` `` without producing a double slash.
 - **A default is baked in** (`http://localhost:5000`) so a fresh clone boots with no
   `.env` at all. Config problems should show up as a failed request, not a crash at import.
+- **Google client IDs default to `''`, and empty means "not configured".**
+  `GOOGLE_SIGN_IN_ENABLED` derives from that and hides the button, so an unconfigured
+  build shows no dead control. It is deliberately *not* per-platform:
+  `expo-auth-session` falls back to the web client ID when a native one is missing,
+  which is the documented Expo Go path.
 
 ### Business logic / invariants
 - `API_BASE_URL` never ends in `/`.
@@ -35,11 +44,88 @@ and layers on the environment-derived `extra` block.
 - `.env` is gitignored; `.env.example` is the committed documentation of what's needed.
 
 ### Dependencies
-`expo-constants`, and `app.config.ts` at the repo root. Nothing imports this yet — the
-API client task is its first consumer.
+`expo-constants`, and `app.config.ts` at the repo root. Consumed by `apiClient.ts` and
+`useGoogleSignIn.ts`.
 
 ### Gotchas
 - Editing `.env` requires restarting the dev server with a cleared cache
   (`npx expo start --clear`); values are inlined at bundle time, not read live.
 - `localhost` does not resolve from an Android emulator — it needs `10.0.2.2`. This is
   noted in `.env.example` and is the most common "why can't the app reach the API".
+- A Google client ID must *also* be listed in the backend's `GOOGLE_CLIENT_IDS`. The ID
+  the app authenticates with becomes the token's `aud` claim, and the API rejects an
+  audience it does not know with `401 invalid social token`.
+
+## apiClient.ts
+
+### Purpose
+`postJson(path, body, signal)` — the one way this app talks to the API.
+
+### Key decisions
+- **`fetch`, not axios.** A handful of calls, no interceptor or retry needs; a client
+  library would be bundle weight for nothing.
+- **Two error types, split by what the user should be told.** `ApiError` carries an HTTP
+  `status` plus the API's machine-readable `error` string; `NetworkError` means the round
+  trip failed. "The server said no" and "you're offline" need different copy, and callers
+  shouldn't have to sniff messages to tell them apart.
+- **This layer never produces user-facing text.** It reports what happened; mapping to
+  copy is `authService.describeSocialAuthError`'s job. Keeping that split means one place
+  to review the wording.
+- **Every request has a 15s timeout**, combined with any caller-supplied `AbortSignal`,
+  so a hung socket cannot leave a screen spinning forever.
+
+### Business logic / invariants
+- A non-2xx reply always throws — success paths never have to check `response.ok`.
+- A 2xx body that is not valid JSON is a `NetworkError`: from the caller's side the round
+  trip did not deliver, whatever the status line said.
+
+### Gotchas
+- The timeout aborts through the same controller as the caller's signal, so a caller
+  cannot distinguish "I cancelled" from "it timed out" — both surface as `NetworkError`.
+- No `Authorization` header is attached yet. When authenticated endpoints land, add it
+  here from the auth context rather than at each call site.
+
+## authService.ts
+
+### Purpose
+Sign-in against the API. Today: exchanging Google and Apple ID tokens for a TaPago JWT.
+`register`/`login` for email + password belong here too.
+
+### Key decisions
+- **Social sign-in is a token exchange, not an OAuth implementation.** The provider SDK
+  owns the entire consent flow and hands back an ID token; this module only trades that
+  token at `POST /auth/google` or `POST /auth/apple`. Verification happens server-side
+  against the provider's JWKS — the app never validates a provider token and must never
+  treat one as proof of identity on its own.
+- **Cancellation is a result, not an error.** `SocialSignInResult` has a distinct
+  `cancelled` case so screens cannot accidentally show an error message to a user who
+  simply closed the sheet. This is the single most common social-auth UX bug.
+- **`exchangeIdTokenAsResult` is the shared tail of both providers**, so screens never
+  need a try/catch and both flows are guaranteed to report failures the same way.
+- **The API response is parsed, not cast.** `parseAuthSession` rejects a malformed body
+  rather than letting `undefined` reach the auth context and produce a signed-in state
+  with no token.
+- **Only the ID token is forwarded for Apple.** Apple returns the user's real name *only
+  on the first authorisation ever*, and never again; letting the API own that decision
+  avoids a reinstall overwriting a stored name with a blank one.
+
+### Business logic / invariants
+- Error copy is exhaustive by status: 400/401/409/503 each get their own message, per the
+  API contract. 409 in particular must not read as "wrong password" — it means the email
+  belongs to a different provider account, and the user needs to be told to sign in the
+  way they did originally.
+- `signInWithApple` must only be called on iOS; `isAppleSignInAvailable()` gates it.
+- Raw error text is never surfaced to users.
+
+### Dependencies
+`expo-apple-authentication`, `apiClient.ts`. Consumed by `app/(auth)/sign-in.tsx`,
+`src/hooks/useGoogleSignIn.ts`, and `src/hooks/useAuth.tsx` (for its types).
+
+### Gotchas
+- Apple signals cancellation with `code === 'ERR_REQUEST_CANCELED'` on the thrown error.
+  That property is not in the public type, so the check is structural — a refactor that
+  "cleans up" the cast will silently turn cancellations back into error banners.
+- `credential.identityToken` is typed nullable and is `null` when the Apple Sign-In
+  entitlement is missing from the build. That is a config problem, not a user problem.
+- Google's half of the flow is *not* here: it must live in a hook. See
+  `src/hooks/CLAUDE.md`.

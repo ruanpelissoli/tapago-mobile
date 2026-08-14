@@ -9,6 +9,8 @@ Reusable, screen-agnostic UI.
 - `SplashScreenFallback.tsx` — full-screen spinner shown while auth state is restoring.
 - `SocialSignInButton.tsx` — neutral provider button (icon + label + spinner), used for
   Google on the sign-in screen.
+- `PrimaryButton.tsx` — filled brand button for a screen's primary action (home's
+  "Create bet", create-bet's "Continue").
 
 ## Key decisions
 - **`ScreenContainer` defaults to `['bottom', 'left', 'right']` edges, excluding `top`.**
@@ -25,6 +27,16 @@ Reusable, screen-agnostic UI.
   `AppleAuthentication.AppleAuthenticationButton` directly. This component exists to give
   Google a button of matching height and weight — it is a sibling of the Apple button,
   not a wrapper around both.
+- **`PrimaryButton` is the filled counterpart to `SocialSignInButton`** — same
+  `MIN_TOUCH_TARGET` height and `radii.md`, opposite weight. They are siblings rather than
+  one parameterised component: a provider button carries an icon slot and a busy state it
+  would otherwise have to ignore.
+- **`PrimaryButton`'s disabled state is a different fill (`colors.border` +
+  `colors.textMuted` label), not a lowered opacity.** The create-bet form leaves Continue
+  disabled until three fields validate, so "you can't press this yet" has to read at a
+  glance; fading brand green to 50% looks like a rendering glitch and drops the label
+  below contrast. `SocialSignInButton` keeps its opacity fade because it is only ever
+  disabled momentarily, while a sign-in flow is in flight.
 - **Icon comes from `@expo/vector-icons` (`AntDesign`), not a bundled asset.** Google's
   branding guidelines do want their official multi-colour mark; swapping this glyph for
   that asset is a designer deliverable, and only this one prop changes when it arrives.

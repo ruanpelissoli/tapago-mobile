@@ -10,6 +10,11 @@ import React, {
 } from 'react';
 
 import type { AuthenticatedUser, AuthSession } from '../services/authService';
+import {
+  clearStoredSession,
+  loadStoredSession,
+  saveStoredSession,
+} from '../services/sessionStorage';
 
 /** The signed-in user, as returned by the API. */
 export type AuthUser = AuthenticatedUser;
@@ -19,9 +24,8 @@ export type AuthState = {
   /**
    * The TaPago JWT for the current session, or `null` when signed out.
    *
-   * Held in memory only — see the note on `restoreSession` below. Anything that
-   * needs to authenticate a request should read it from here rather than
-   * threading it through props.
+   * Anything that needs to authenticate a request should read it from here
+   * rather than threading it through props.
    */
   token: string | null;
   /** True once a session has been restored or created. */
@@ -46,26 +50,51 @@ const AuthContext = createContext<AuthState | undefined>(undefined);
 /**
  * Auth state for the app.
  *
- * The session (user + JWT) is held **in memory only**. `restoreSession` is the
- * single seam a later task swaps for a real `expo-secure-store` read, so
- * nothing else has to change when persistence lands; until then every cold
- * start begins signed out.
+ * The session (user + JWT) is persisted to `expo-secure-store` by
+ * `src/services/sessionStorage.ts` and restored on cold start, so a signed-in
+ * user stays signed in across restarts. `restoreSession` is the single seam
+ * that reads it; no consumer knows storage exists.
+ *
+ * React state is always the source of truth and is never gated on the store:
+ * a failed read or write degrades to in-memory-only behaviour for the life of
+ * the process rather than blocking sign-in or stranding the app on a splash
+ * screen.
  */
 export function AuthProvider({ children }: PropsWithChildren) {
   const [session, setSession] = useState<AuthSession | null>(null);
   const [isRestoring, setIsRestoring] = useState(true);
   const isMounted = useRef(true);
+  /**
+   * Set by `signIn`/`signOut`. A restore that resolves after the user has
+   * already acted must not resurrect (or clobber) their session.
+   */
+  const hasUserActed = useRef(false);
+  /**
+   * Serialises store writes so they land in call order. Two rapid `signIn`s
+   * would otherwise have no ordering guarantee, and the loser could be the last
+   * value written.
+   */
+  const writeQueue = useRef<Promise<void>>(Promise.resolve());
+
+  /** Chain a store operation onto the queue; failures never escape. */
+  const enqueueWrite = useCallback((operation: () => Promise<void>) => {
+    writeQueue.current = writeQueue.current.then(operation, operation);
+  }, []);
 
   useEffect(() => {
     isMounted.current = true;
 
     async function restoreSession() {
-      // Placeholder: no persisted session exists yet.
-      const restored: AuthSession | null = null;
-      // Guard against setting state after unmount (fast reload / process death).
-      if (!isMounted.current) return;
-      setSession(restored);
-      setIsRestoring(false);
+      try {
+        const restored = await loadStoredSession();
+        // Guard against setting state after unmount (fast reload / process death).
+        if (!isMounted.current || hasUserActed.current) return;
+        setSession(restored);
+      } finally {
+        // In a `finally` so no failure path can leave the app on the splash
+        // screen forever: `isRestoring` settles exactly once, on every path.
+        if (isMounted.current) setIsRestoring(false);
+      }
     }
 
     void restoreSession();
@@ -75,8 +104,22 @@ export function AuthProvider({ children }: PropsWithChildren) {
     };
   }, []);
 
-  const signIn = useCallback((nextSession: AuthSession) => setSession(nextSession), []);
-  const signOut = useCallback(() => setSession(null), []);
+  // State first, storage second: the redirect in `(auth)/_layout.tsx` fires off
+  // the state flip and must not wait on (or fail with) a keychain write.
+  const signIn = useCallback(
+    (nextSession: AuthSession) => {
+      hasUserActed.current = true;
+      setSession(nextSession);
+      enqueueWrite(() => saveStoredSession(nextSession));
+    },
+    [enqueueWrite],
+  );
+
+  const signOut = useCallback(() => {
+    hasUserActed.current = true;
+    setSession(null);
+    enqueueWrite(clearStoredSession);
+  }, [enqueueWrite]);
 
   const value = useMemo<AuthState>(
     () => ({

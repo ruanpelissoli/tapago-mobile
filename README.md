@@ -37,7 +37,7 @@ app/                    # Routes — the directory tree IS the navigation graph
 src/
   components/           # Shared presentational UI
   hooks/                # useAuth (React Context), useGoogleSignIn
-  services/             # env config, apiClient, authService
+  services/             # env config, apiClient, authService, sessionStorage
   theme/                # Colours, spacing, type scale
 app.json                # Static Expo config (app name, icons, plugins)
 app.config.ts           # Dynamic config — injects env values into `extra`
@@ -78,10 +78,11 @@ only on iOS 13+, per Apple's guidelines.
 
 ## Current state
 
-Sign-in works end to end against the API, but the session is **in-memory only** — nothing
-is persisted, so the app starts signed out on every launch. Email/password credentials,
-token persistence (`expo-secure-store`) and the dashboard land in follow-up tasks;
-`home` is still a stub.
+Sign-in works end to end against the API and the session **persists across restarts** —
+the JWT and user are stored in `expo-secure-store` and restored on cold start, so a
+signed-in user stays signed in. The restore is optimistic: token expiry is not checked,
+and no request attaches an `Authorization` header yet. Email/password credentials,
+`401`-driven sign-out and the dashboard land in follow-up tasks; `home` is still a stub.
 
 There is no test runner in this project yet. `npm run typecheck` and `npm run lint` are
 the checks that exist; both must pass.

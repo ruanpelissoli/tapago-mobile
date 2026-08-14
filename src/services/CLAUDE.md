@@ -1,11 +1,13 @@
 # src/services/ — app services and configuration
 
 ## Purpose
-Non-UI infrastructure: environment config, the API transport, and authentication.
+Non-UI infrastructure: environment config, the API transport, authentication, and
+device storage.
 
 - `env.ts` — runtime configuration resolved from `.env`.
 - `apiClient.ts` — thin JSON transport over `fetch`.
 - `authService.ts` — sign-in against the API, including social token exchange.
+- `sessionStorage.ts` — persists the auth session to `expo-secure-store`.
 
 ## env.ts
 
@@ -129,3 +131,53 @@ Sign-in against the API. Today: exchanging Google and Apple ID tokens for a TaPa
   entitlement is missing from the build. That is a config problem, not a user problem.
 - Google's half of the flow is *not* here: it must live in a hook. See
   `src/hooks/CLAUDE.md`.
+
+## sessionStorage.ts
+
+### Purpose
+Reads, writes and deletes the persisted auth session so a signed-in user survives an
+app restart. `AUTH_SESSION_KEY`, `parseStoredSession`, `loadStoredSession`,
+`saveStoredSession`, `clearStoredSession`.
+
+### Key decisions
+- **`expo-secure-store`, never `AsyncStorage`.** A JWT must not sit in plaintext on the
+  device. Default keychain / Android-keystore behaviour is used, so no `plugins` entry
+  in the Expo config is required.
+- **The whole session is stored as one JSON value under one key.** `AuthState.user` has
+  to survive a restart and there is no way to re-fetch it — `apiClient` exposes only
+  `postJson` and the API has no `/auth/me`. Storing the bare token would force a new
+  endpoint or client-side JWT decoding. One key, one write also means the token and the
+  user can never disagree — the invariant `useAuth` exists to protect.
+- **Key is `auth_session`, not `auth_token`,** because the value is the whole session.
+- **This module never rejects.** Storage being unavailable is not a reason to fail a
+  sign-in or strand the app on a splash screen. Callers treat it as best-effort; a
+  failure degrades to in-memory-only behaviour for the life of the process.
+- **Restore is optimistic — expiry is not checked and the JWT is not decoded.** Nothing
+  attaches an `Authorization` header yet, so a restored-but-expired token costs nothing.
+  Clearing on a `401` is a later task.
+- **`parseStoredSession` is pure and exported**, so it is the first thing covered when a
+  test runner lands.
+
+### Business logic / invariants
+- Parsing mirrors `authService.parseAuthSession`: nothing is cast, `token` must be a
+  non-empty string, `user.id`/`email`/`name` must all be strings, and the result is
+  freshly constructed from the validated fields. A session with a missing token or user
+  must never reach the auth context.
+- A stored value that fails validation is **deleted**, so a corrupt key cannot fail again
+  on every subsequent launch.
+- **Nothing logged ever contains the value or the caught error** — only the fixed
+  `STORAGE_WARNING` string. SecureStore errors on some platforms echo back the value they
+  failed to handle, which would put the JWT in the log. Do not "improve" the catch blocks
+  by interpolating the error.
+
+### Dependencies
+`expo-secure-store`, and `authService.ts` for the `AuthSession` type. Consumed only by
+`src/hooks/useAuth.tsx`.
+
+### Gotchas
+- iOS keychain warns above ~2048 bytes per value. A JWT plus three short user fields is
+  well inside that, but the ceiling exists if a future task stuffs more into the session.
+- `expo-secure-store` is a native module. An existing dev client built before it was added
+  will not have it; rebuild, and restart the bundler with `npx expo start --clear`.
+- `app.json` `platforms` is `["ios", "android"]`, so there is no web fallback here. Adding
+  web would need one — `SecureStore` is unavailable in a browser.

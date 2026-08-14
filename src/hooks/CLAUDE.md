@@ -24,28 +24,43 @@ Reusable stateful logic.
   no window where one is set and the other isn't. `user`/`token` are derived for readers.
 - **`AuthUser` is an alias of `authService.AuthenticatedUser`.** The API decides the shape
   of a user; re-declaring it here would let the two drift silently.
+- **State first, storage second.** `signIn`/`signOut` set React state and *then* enqueue
+  the store operation. They stay synchronous `void` functions: `sign-in.tsx` calls
+  `signIn(session)` in a non-async flow, and the route guards' redirect must fire off the
+  state flip, not wait on a keychain write that might fail.
+- **Storage lives in `src/services/sessionStorage.ts`, not inline here.** Device storage is
+  infrastructure; this file stays React state. `restoreSession` remains the single seam.
+- **Writes go through a serialising queue (`writeQueue` ref).** Two rapid `signIn` calls
+  have no ordering guarantee otherwise, and the loser could be the last value written.
+- **`hasUserActed` ref guards the restore.** A `signOut` (or `signIn`) while the cold-start
+  read is still in flight must not be undone when that read resolves.
 
 ### Business logic / invariants
 - `isAuthenticated` is derived strictly from `user !== null`. Never set it independently
   — two sources of truth for "is signed in" is exactly how auth bugs happen.
 - **`isRestoring` starts `true` and settles to `false` exactly once**, after the restore
   attempt. Consumers must render a loading state while it is `true`; see `app/CLAUDE.md`.
+  It is set in a `finally` deliberately — no failure path may leave the app stuck on
+  `SplashScreenFallback`.
 - The context value is memoised. Without it every provider render produces a new object
-  and re-renders every guard in the tree.
+  and re-renders every guard in the tree. `signIn`/`signOut` keep empty-ish `useCallback`
+  deps (only the stable `enqueueWrite`) so the memo identity survives re-renders.
+- Auth state, not the store, is the source of truth. A read/write failure is swallowed
+  and the session simply lives for this process only.
 
 ### Dependencies
-React only. Consumed by `app/_layout.tsx` (mounts the provider) and both group layouts.
+React, plus `src/services/sessionStorage.ts` for persistence. Consumed by
+`app/_layout.tsx` (mounts the provider) and both group layouts.
 
 ### Gotchas
-- **Storage is still in-memory.** `restoreSession` always resolves to `null`, so the JWT
-  lives only for the life of the process and the app starts signed out on every launch.
-  This is expected: the sign-in *network* path is real, persistence is not yet.
-  When it lands it belongs in `expo-secure-store` (a JWT must never go to
-  `AsyncStorage`), behind `restoreSession` and `signIn`.
-- `restoreSession` is the single intended seam for real persistence
-  (`expo-secure-store`). Replacing its body should be sufficient; no consumer changes.
-- The `isMounted` ref guards against setting state after unmount during Fast Refresh.
-  Keep it when making `restoreSession` genuinely async.
+- **The session is persisted** to `expo-secure-store` under `auth_session` — the whole
+  `AuthSession`, not just the JWT, because `user` has to survive a restart and there is no
+  `/auth/me` to re-fetch it. See `src/services/CLAUDE.md`. A JWT must never go to
+  `AsyncStorage`.
+- `restoreSession` is still the only place that reads storage, and `signIn`/`signOut` the
+  only places that write it. Keep it that way; nothing else should know the key exists.
+- The `isMounted` ref guards against setting state after unmount during Fast Refresh —
+  the restore is genuinely async now, so removing it reintroduces the warning.
 - File is `.tsx`, not `.ts` — it returns JSX from the provider.
 
 ## useGoogleSignIn.ts

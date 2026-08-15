@@ -138,6 +138,14 @@ export function centsToApiAmount(cents: number): string {
 }
 
 /**
+ * `1000` → `1.000`. Shared by both display formatters so the two cannot drift
+ * apart on how thousands are marked.
+ */
+function groupThousands(whole: string): string {
+  return whole.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+}
+
+/**
  * `100000` → `R$ 1.000,00`.
  *
  * Display only — see `centsToApiAmount` for the value the API accepts.
@@ -149,8 +157,29 @@ export function centsToApiAmount(cents: number): string {
 export function formatCentsAsBrl(cents: number): string {
   const safeCents = Number.isFinite(cents) ? Math.max(0, Math.round(cents)) : 0;
 
-  const whole = String(Math.floor(safeCents / 100)).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  const whole = groupThousands(String(Math.floor(safeCents / 100)));
   const fraction = String(safeCents % 100).padStart(2, '0');
 
   return `R$ ${whole},${fraction}`;
+}
+
+/**
+ * `"50.00"` → `R$ 50,00`; `"1000.00"` → `R$ 1.000,00`.
+ *
+ * The display counterpart of `centsToApiAmount`, for money that arrives *from*
+ * the API. `stake_amount_brl` is exact text, and the third member of this
+ * formatter family exists so nobody is tempted to bridge the gap with
+ * `parseFloat` — **this function does no arithmetic at all**, it reshapes the
+ * string. That is the invariant `src/services/CLAUDE.md` states for `Bet`.
+ *
+ * Anything that does not match the wire shape (`parseBet` only guarantees a
+ * non-empty string) degrades to `R$ <raw>` — the exact value the server sent,
+ * which is always better than `R$ NaN`.
+ */
+export function formatApiAmountAsBrl(amount: string): string {
+  if (!/^\d+(\.\d{1,2})?$/.test(amount)) return `R$ ${amount}`;
+
+  const [integerPart, fractionPart = ''] = amount.split('.');
+
+  return `R$ ${groupThousands(integerPart)},${fractionPart.padEnd(2, '0')}`;
 }

@@ -1,10 +1,13 @@
-# src/domain/ — bet domain rules and input parsing
+# src/domain/ — domain rules, input parsing and display formatting
 
 ## Purpose
-Pure, framework-free rules for the create-bet flow: the goal-type enum, the numeric
-bounds, and the functions that turn what a user typed into a value the API can accept.
-Screens import from here so validation is one testable place rather than logic smeared
-across JSX.
+Pure, framework-free rules for the app's domain objects: the goal-type enum and numeric
+bounds for bets, the functions that turn what a user typed into a value the API can
+accept, and the display rules for a saved card. Screens import from here so validation
+and formatting are one testable place rather than logic smeared across JSX.
+
+- `bet.ts` / `betForm.ts` — the create-bet flow's enum, bounds, parsing and formatting.
+- `paymentMethod.ts` — how a saved card is named, masked and announced.
 
 ## Key decisions
 - **The `goal_type` enum lives app-side, in `GOAL_TYPES`.** There is no generated client
@@ -44,9 +47,29 @@ across JSX.
   already-converted integer centavos, and a deep link can put anything in the URL, so the
   value is re-validated against the same bounds instead of being trusted.
 
+## paymentMethod.ts — saved-card display rules
+
+`formatCardBrand`, `maskedCardLabel` and `cardAccessibilityLabel`. Extracted from the
+wallet screen for the same reason as the bet parsers: so the screen stays layout and
+wiring, and so these are unit-testable the day a runner lands.
+
+- **The brand table is keyed by Mercado Pago's own `payment_method_id`** (`master`, not
+  `mastercard`) because that is verbatim what the API stores in `card_brand`. Renaming a
+  key to something more natural silently breaks the lookup.
+- **Unknown brands fall back to a capitalised form of whatever arrived**, not to a blank
+  or to "Card". Mercado Pago adds brands over time, and a new one should still render as
+  something recognisable rather than vanishing from the row.
+- **The accessibility label is built separately from the visible one.** "•••• 1234" reads
+  as four bullet characters to a screen reader; "Visa ending in 1234, default card" is
+  the same information said in a way that survives being spoken. Keep them in step but
+  do not collapse them into one string.
+- The mask is display-only. The app only ever receives `lastFour` — there is no full PAN
+  anywhere to mask.
+
 ## Dependencies
 Nothing outside this directory. No React, no `expo-router`, no `react-native` — that is
-the point. Consumed by `app/(app)/create-bet.tsx` and `app/(app)/create-bet-payment.tsx`.
+the point. Consumed by `app/(app)/create-bet.tsx`, `app/(app)/create-bet-payment.tsx` and
+`app/(app)/wallet.tsx`.
 
 ## Gotchas
 - There is no test runner in this project yet. These functions are pure and have no

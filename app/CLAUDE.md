@@ -11,8 +11,8 @@ React Navigation stack anywhere in this project.
 - `index.tsx` — entry route. Redirects to the right group once auth state settles.
 - `(auth)/` — unauthenticated screens. Currently `sign-in.tsx`.
 - `(app)/` — authenticated screens, gated by `(app)/_layout.tsx`: `home.tsx`,
-  `create-bet.tsx` (step 1 of the create-bet flow) and `create-bet-payment.tsx` (step 2,
-  currently a stub).
+  `create-bet.tsx` (step 1 of the create-bet flow), `create-bet-payment.tsx` (step 2,
+  currently a stub) and `wallet.tsx` (saved cards + add a card).
 - `+not-found.tsx` — catch-all for unmatched routes and bad deep links.
 
 Parenthesised segments are **route groups**: they organise files and scope a layout
@@ -35,8 +35,9 @@ without appearing in the URL. `app/(app)/home.tsx` is reachable at `/home`.
   `SplashScreenFallback` until restore settles.
 - Redirect targets use group-qualified hrefs (`/(app)/home`, `/(auth)/sign-in`) so the
   destination group's layout — and therefore its guard — is unambiguous.
-- `home.tsx` is still a **stub** — a heading plus a "Create bet" button that is the only
-  entry point into the create-bet flow. The dashboard task replaces all of it.
+- `home.tsx` is still a **stub** — a heading plus "Create bet" and "Payment methods"
+  buttons, the only entry points into the create-bet flow and the wallet. The dashboard
+  task replaces all of it.
 - A screen under `(app)/` is reachable purely by existing, but it needs a `Stack.Screen`
   entry in `(app)/_layout.tsx` to get a themed header and a title.
 - **Authenticated API calls belong in `(app)/`, behind the guard.** Calling one while
@@ -100,8 +101,47 @@ every one instead of trusting them; a bad deep link renders "Not provided", neve
 The payment screen is a **deliberate stub** — real card selection and `POST /v1/bets` are
 a follow-up task.
 
+## (app)/wallet.tsx — saved cards, and adding one
+
+Lists the user's saved cards (`listPaymentMethods`) and adds a new one by tokenising it
+in a Mercado Pago WebView (`src/components/MercadoPagoCardForm.tsx`) and posting the
+token to `addPaymentMethod`. First consumer of `src/services/paymentMethods.ts`.
+
+- **The add-card form is a `Modal`, not a route.** A Mercado Pago token is single-use and
+  short-lived, so card entry must not be something the back stack or a deep link can
+  resurrect. It also keeps the list mounted underneath, which makes "cancel leaves the
+  list untouched" true by construction rather than by care.
+- **Abort *before* setState, always.** `apiClient` merges the caller's signal with its own
+  15s timeout, so an abort and a timeout both arrive as `NetworkError` and cannot be told
+  apart from the error object. `controller.signal.aborted` is the only reliable "did we
+  cancel this?" — every `then`/`catch` checks it first. Both controllers are aborted on
+  unmount and on cancel.
+- **`loadMethods` is a promise chain, not `async`/`await`, and does not set `loading`
+  itself.** `react-hooks/set-state-in-effect` is an *error* in this repo's lint config and
+  rejects a `setState` reachable synchronously from an effect body. Initial state is
+  already `loading`; `reload()` is the wrapper that shows the spinner for retry and
+  post-add refresh. Do not "simplify" it back to `async` — lint will fail.
+- **An empty list is a state, never an error.** `[]` renders the empty state with the same
+  "Add card" action; only a thrown error shows the inline `describePaymentMethodError`
+  message plus "Try again".
+- **Server order is rendered as received** (`is_default DESC, created_at DESC`). No client
+  sort — that is what keeps the default card first.
+- **A save that fails *after* tokenisation cannot be retried.** The token is spent, so the
+  message appends "enter the card again" and is pushed into the WebView, which clears the
+  card fields. Re-submitting the same token would only ever 400.
+- **`isSavingRef` guards a double-fired token**, mirroring `create-bet.tsx`'s
+  `hasNavigated`: a WebView can post the same message more than once.
+- Deleting a card and setting a default are **out of scope** — no API exists for either.
+  `isDefault` only drives a badge.
+- With no `MERCADO_PAGO_PUBLIC_KEY` configured, "Add card" is disabled with an inline
+  explanation rather than opening a form that can only fail (the `GOOGLE_SIGN_IN_ENABLED`
+  precedent).
+
 ## Dependencies
 - `src/domain/bet`, `src/domain/betForm` — goal-type enum, bounds, parsing/formatting.
+- `src/domain/paymentMethod` — card brand/mask/accessibility-label display rules.
+- `src/services/paymentMethods`, `src/services/mercadoPago` — the wallet's data and
+  tokenisation layers.
 - `src/hooks/useAuth` — the `AuthProvider`/`useAuth` pair both guards read.
 - `src/hooks/useGoogleSignIn`, `src/services/authService` — the two social sign-in flows.
 - `src/components/ScreenContainer`, `SplashScreenFallback`, `SocialSignInButton`,
@@ -122,8 +162,10 @@ a follow-up task.
   token getter with `src/services/apiClient.ts`, so `bets.ts`/`paymentMethods.ts` attach
   it automatically. A restored-but-expired token therefore shows up as a `401` from a
   screen's first fetch; clearing the session on `401` is still a follow-up task.
-- Adding a native module (as `expo-secure-store` was) needs the bundler restarted with
-  `npx expo start --clear`, and a dev client built before it was added must be rebuilt.
+- Adding a native module (as `expo-secure-store` and now `react-native-webview` were)
+  needs the bundler restarted with `npx expo start --clear`, and a dev client built
+  before it was added must be rebuilt. `react-native-webview` *is* bundled in Expo Go, so
+  the wallet's add-card form works there without a custom build.
 - **Social sign-in cannot work in Expo Go on a device without native config.** Apple
   Sign-In needs the entitlement from `usesAppleSignIn`, so it requires a development
   build; the button simply does not appear where the module reports unavailable.

@@ -35,9 +35,8 @@ without appearing in the URL. `app/(app)/home.tsx` is reachable at `/home`.
   `SplashScreenFallback` until restore settles.
 - Redirect targets use group-qualified hrefs (`/(app)/home`, `/(auth)/sign-in`) so the
   destination group's layout — and therefore its guard — is unambiguous.
-- `home.tsx` is still a **stub** — a heading plus "Create bet" and "Payment methods"
-  buttons, the only entry points into the create-bet flow and the wallet. The dashboard
-  task replaces all of it.
+- `home.tsx` is the dashboard: it fetches the user's one in-flight bet and renders either
+  a summary card or a "Start a bet" CTA. See its section below.
 - A screen under `(app)/` is reachable purely by existing, but it needs a `Stack.Screen`
   entry in `(app)/_layout.tsx` to get a themed header and a title.
 - **Authenticated API calls belong in `(app)/`, behind the guard.** Calling one while
@@ -66,6 +65,49 @@ Offers Google and Apple sign-in. Both providers converge on one funnel
   covers it while a flow is in flight; the scrim is also what blocks a second tap.
 - The screen can unmount mid-flow, so the result handler checks an `isMounted` ref before
   setting state.
+
+## (app)/home.tsx — the dashboard
+
+Fetches `getActiveBet()` and renders **four** states: loading, an active/pending bet
+summary card, the empty "Start a bet" CTA, and an error. It is where the create-bet flow
+lands on success, so it is the first place a user sees their bet exists.
+
+- **Four states, not three: a failed fetch is never collapsed into "no bet".** The
+  recovery from the two is opposite — retry vs. start a bet — and silently degrading an
+  outage into an empty state invites a user to open a bet they may already have.
+- **The loader is a promise chain that never sets `loading` itself**, exactly as in
+  `wallet.tsx` and `create-bet-payment.tsx`. `react-hooks/set-state-in-effect` is an
+  *error* in this repo's lint config; initial state is already `loading` and `reload()` is
+  the wrapper that brings the spinner back for "Try again". Do not rewrite it as
+  `async`/`await` — lint will fail.
+- **The focus refresh is therefore silent.** `useFocusEffect` covers first mount *and*
+  every return from create-bet or the wallet; because `loadBet` does not flip `status`,
+  coming back swaps the content in place instead of blinking through a full-screen
+  spinner. `loadBet` must keep a stable identity (no state deps, controller in a ref) or
+  the effect re-fires every render.
+- **`controller.signal.aborted` is checked before every `setState`.** `apiClient` merges
+  the caller's signal with its own timeout, so an abort and a timeout are the same
+  `NetworkError` — the signal is the only reliable "did we cancel this?".
+- **A `pending` bet renders the card, not the empty state, and shows no CTA.** It still
+  occupies the user's single in-flight slot, so a second `createBet` could only return
+  `409`. It gets a "Confirming" badge plus a line explaining the hold is still landing.
+- **"Payment methods" renders in every state, including loading and error.** It is the
+  only route into the wallet; gating it on a successful fetch would strand that screen
+  whenever the API is down.
+- **Labels and money are never hand-built here.** The goal comes from `goalTypeLabel()`
+  (falling back to the raw value, never a hardcoded "Exercise"), and `stakeAmountBrl` goes
+  through `formatApiAmountAsBrl`, which reshapes the exact string and never parses it.
+- **The days-remaining row is omitted entirely when `daysRemaining` returns `null`** — a
+  malformed `created_at` hides the counter rather than rendering `NaN days left`.
+- **`ScreenContainer` does not scroll**, so this screen brings its own `ScrollView`: card
+  plus actions overflow a small screen at large system type (the `create-bet-payment.tsx`
+  precedent).
+- `getActiveBet`'s 404 → `null` mapping is **lossy**: a misconfigured `API_BASE_URL` or a
+  renamed route also 404s and reads here as "no bet". Check the base URL before the data.
+- A restored-but-expired token surfaces here as a `401` — home is now the *first*
+  authenticated call on a cold start, so this is the most visible place the known 401 gap
+  shows. It renders `describeBetError`'s session-expired copy; clearing the session on 401
+  is a separate task and deliberately not built here.
 
 ## (app)/create-bet.tsx — step 1 of the create-bet flow
 
@@ -147,7 +189,8 @@ pre-authorisation hold.
   `goalTypeLabel` stays the display path. The two `GoalType` unions (`src/domain/bet` and
   `src/services/bets`) are structurally identical string unions, so the domain value flows
   in without conversion — if they ever diverge, this is where it breaks.
-- An Active Bet / dashboard screen is out of scope; success lands on the `home` stub.
+- Success lands on `home`, which refetches on focus and shows the bet that was just
+  opened. Nothing is passed back — the refetch *is* the channel.
 
 ## (app)/wallet.tsx — saved cards, and adding one
 
@@ -191,7 +234,8 @@ token to `addPaymentMethod`. First consumer of `src/services/paymentMethods.ts`.
 - `src/services/paymentMethods`, `src/services/mercadoPago` — the wallet's data and
   tokenisation layers; `paymentMethods` is also step 2's card list.
 - `src/services/bets` — `createBet`/`getActiveBet`/`describeBetError`, used by
-  `(app)/create-bet-payment.tsx`.
+  `(app)/create-bet-payment.tsx` (all three) and `(app)/home.tsx`
+  (`getActiveBet`/`describeBetError`).
 - `src/services/apiClient` — `ApiError`/`NetworkError`, which step 2 switches on to pick a
   recovery action (the *copy* still comes from `describe*Error`).
 - `src/hooks/useAuth` — the `AuthProvider`/`useAuth` pair both guards read.

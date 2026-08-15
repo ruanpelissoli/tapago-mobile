@@ -18,13 +18,31 @@ and formatting are one testable place rather than logic smeared across JSX.
   conversion with integer arithmetic on the split string parts, because
   `parseFloat('10.55') * 100` is `1054.9999…`. The centavos value is what crosses the
   router-param boundary; formatting back to `R$ 10,55` is a display concern only.
-- **Two formatters, and they are not interchangeable.** `formatCentsAsBrl` is
+- **Three money formatters, and they are not interchangeable.** `formatCentsAsBrl` is
   **display-only** (`R$ 1.000,00` — grouping, comma). `centsToApiAmount` is the **wire**
   format for `stake_amount_brl` (`"1000.00"` — dot, always two decimals, no grouping, no
   `R$`). Sending the display string to `POST /v1/bets` is a `400`, so the mirror-image
   pair exists to make the right one obvious at a call site. Both build the string with
   integer arithmetic on the split parts for the `parseStakeCents` reason — `cents / 100`
   reintroduces exactly the binary-float error centavos exist to avoid.
+  The third, `formatApiAmountAsBrl`, is for money coming **back** from the API
+  (`"50.00"` → `R$ 50,00`). It is the display counterpart of `centsToApiAmount` and does
+  **no arithmetic at all** — it gates on a regex and reshapes the string, because
+  `stakeAmountBrl` is exact text that must never be parsed into a float (see
+  `src/services/CLAUDE.md`). It exists precisely so nobody bridges that gap with
+  `parseFloat`. An input that fails the regex degrades to `R$ <raw>` — the exact value the
+  server sent, always better than `R$ NaN`. All three share one `groupThousands` helper so
+  the thousands mark cannot drift between them.
+- **`daysRemaining` returns `null`, never `NaN`, and is clamped at both ends.** Same rule
+  as the parsers: an unparseable `created_at` yields `null` so the screen *hides* the
+  counter rather than rendering "NaN days left". Elapsed days are floored at `0` (clock
+  skew between device and server is normal, and a future `created_at` must not inflate the
+  count above `targetDays`), and the result is floored at `0` so a bet past its target
+  reads `0 days left` rather than a negative countdown. `now` is an injectable parameter
+  purely so the function is deterministic under a future test runner.
+- **Day counts are formatted, not interpolated.** `formatDaysRemaining` and
+  `formatDayCount` own the singular/plural rule in one place, so no screen can ship
+  "1 days left".
 - **Money crosses the wire as a `string`, never a `number`.** `createBet` types
   `stakeAmountBrl` as a string for the same reason the API sends one back; a `number`
   there would put a rounding error in the one field a user is guaranteed to notice.
@@ -58,6 +76,9 @@ and formatting are one testable place rather than logic smeared across JSX.
   type `10,50`) and normalises to a dot, which is the only form the parsers accept.
 - Max 2 decimal places, max 4 integer digits — enforced at the keystroke *and* re-checked
   by the parser, because a paste can arrive without keystrokes.
+- `daysRemaining` divides by a fixed `86_400_000` ms, per the product rule — it is a
+  **duration**, not a calendar difference, so a DST boundary can shift the tick by an
+  hour. Documented rather than "fixed": the formula is the spec.
 - `parseStakeCentsParam` exists separately from `parseStakeCents`: params carry the
   already-converted integer centavos, and a deep link can put anything in the URL, so the
   value is re-validated against the same bounds instead of being trusted.
@@ -83,8 +104,9 @@ wiring, and so these are unit-testable the day a runner lands.
 
 ## Dependencies
 Nothing outside this directory. No React, no `expo-router`, no `react-native` — that is
-the point. Consumed by `app/(app)/create-bet.tsx`, `app/(app)/create-bet-payment.tsx` and
-`app/(app)/wallet.tsx`.
+the point. Consumed by `app/(app)/create-bet.tsx`, `app/(app)/create-bet-payment.tsx`,
+`app/(app)/wallet.tsx` and `app/(app)/home.tsx` (the dashboard's goal label, stake
+formatting and days-remaining rules).
 
 ## Gotchas
 - There is no test runner in this project yet. These functions are pure and have no
@@ -92,6 +114,10 @@ the point. Consumed by `app/(app)/create-bet.tsx`, `app/(app)/create-bet-payment
   cases worth covering are `''`, `'007'`, a lone `,`, `'10.'`, `'10,555'`, `'0,99'` and
   `'1000,01'`. For `centsToApiAmount`: `100` → `"1.00"`, `5000` → `"50.00"`, `100000` →
   `"1000.00"`, plus `0`, a non-integer and a negative (all clamped, never `NaN`).
+  For `formatApiAmountAsBrl`: `"50.00"`, `"1000.00"`, `"5"`, `"5.5"` and a junk string
+  (must fall back to `R$ <raw>`, never `R$ NaN`). For `daysRemaining`: creation day (full
+  `targetDays`), a bet one day past target (`0`, not `-1`), a future `createdAt` (capped
+  at `targetDays`) and `'not-a-date'` (`null`).
 - `sanitizeTargetDaysInput` truncates rather than rejects: typing `3650` leaves `365`.
   That is intentional (the field cannot exceed 3 digits) but means the visible value can
   differ from the last keystroke.

@@ -248,7 +248,11 @@ and the copy mapper `describeBetError`.
 `apiClient.ts` only. Consumed by `app/(app)/create-bet-payment.tsx`, which implements the
 non-idempotent-recovery rule below: on `503` or `NetworkError` it calls `getActiveBet()`
 to reconcile instead of re-calling `createBet`, and only offers a retry when that comes
-back `null`. The dashboard screen is the other intended consumer.
+back `null`. `app/(app)/home.tsx` is the other consumer — it calls `getActiveBet()` on
+focus to decide between a bet summary card and a create-bet CTA, and renders
+`describeBetError` inline with a retry. Note it treats a thrown error and a `null` as
+*distinct* states: degrading a failed fetch into "no active bet" would invite a user to
+open a bet they may already hold.
 
 ### Gotchas
 - **`createBet` is not idempotent — never blind-retry it.** A `503` leaves the bet
@@ -259,6 +263,10 @@ back `null`. The dashboard screen is the other intended consumer.
 - **404 → `null` is slightly lossy.** A misconfigured `API_BASE_URL` or a renamed route
   also 404s and would read as "no active bet". If the dashboard insists there is no bet,
   check the base URL before the data.
+- **`stakeAmountBrl` has a display formatter now** — `formatApiAmountAsBrl` in
+  `src/domain/betForm.ts`. It reshapes the exact string and never parses it, which is what
+  keeps the "no arithmetic on money from the API" rule enforceable at a call site rather
+  than only stated here.
 
 ## paymentMethods.ts
 

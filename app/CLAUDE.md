@@ -11,8 +11,8 @@ React Navigation stack anywhere in this project.
 - `index.tsx` — entry route. Redirects to the right group once auth state settles.
 - `(auth)/` — unauthenticated screens. Currently `sign-in.tsx`.
 - `(app)/` — authenticated screens, gated by `(app)/_layout.tsx`: `home.tsx`,
-  `create-bet.tsx` (step 1 of the create-bet flow), `create-bet-payment.tsx` (step 2,
-  currently a stub) and `wallet.tsx` (saved cards + add a card).
+  `create-bet.tsx` (step 1 of the create-bet flow), `create-bet-payment.tsx` (step 2 —
+  card selection and `POST /v1/bets`) and `wallet.tsx` (saved cards + add a card).
 - `+not-found.tsx` — catch-all for unmatched routes and bad deep links.
 
 Parenthesised segments are **route groups**: they organise files and scope a layout
@@ -96,10 +96,58 @@ step. **No network call happens here**; all rules live in `src/domain/bet.ts` an
 
 **Param contract with `create-bet-payment.tsx`**: `goalType` (the raw `goal_type` value),
 `targetDays` and `stakeCents` — money as **integer centavos**, so no float ever represents
-an amount. Params serialise to `string | string[]`, so the stub re-parses and re-validates
-every one instead of trusting them; a bad deep link renders "Not provided", never `NaN`.
-The payment screen is a **deliberate stub** — real card selection and `POST /v1/bets` are
-a follow-up task.
+an amount. Params serialise to `string | string[]`, so step 2 re-parses and re-validates
+every one instead of trusting them; a bad deep link gets an explanatory screen and a way
+back here, never `NaN` in a request.
+
+## (app)/create-bet-payment.tsx — step 2 of the create-bet flow
+
+Keeps the bet summary from step 1 on screen, lists the user's saved cards as a
+single-select radio group, and submits `POST /v1/bets` — which places the Mercado Pago
+pre-authorisation hold.
+
+- **`createBet` is not idempotent, and this screen never blind-retries it.** A `503`
+  leaves the bet `pending` server-side; a `pending` bet occupies the user's single
+  in-flight slot, so a retry returns `409` instead of creating a bet. A client timeout or
+  abort is the same problem — the request may have completed anyway. So `503` and
+  `NetworkError` reconcile through `getActiveBet()`: a bet comes back → treat it as
+  success; `null` → the bet genuinely was not created, so a retry is offered; the
+  reconcile itself throws → "Check bet status", which re-runs `getActiveBet` **only**.
+- **Copy always comes from `describeBetError`; only the *recovery* varies by status.**
+  400/402/404/500 keep the card list interactive so a different card can be picked; 409
+  offers "Go to home" (a retry can only 409 again); 401 shows the session-expired copy
+  with no action — clearing the session on 401 is a separate, known follow-up. Raw error
+  messages are never surfaced.
+- **`isSubmittingRef` on top of the `disabled` prop.** A second tap can already be queued
+  when the first flips state, and each extra `createBet` is a real pre-authorisation
+  attempt. Same reason as `hasNavigated` here and `isSavingRef` in the wallet. It is
+  deliberately left `true` on success, so a queued tap cannot open a second bet while the
+  confirmation alert is up.
+- **Refetch-on-focus *is* the contract with the wallet.** "Add card" pushes
+  `/(app)/wallet` and the user comes back with the system back button; `useFocusEffect`
+  re-runs the list fetch, so no callback or return-param channel exists. Because
+  `loadMethods` does not set `loading` itself, that refresh is silent — the list is
+  replaced in place rather than blinking through a spinner.
+- **Selection is reconciled in one functional `setSelectedId`** inside the fetch's success
+  callback: keep a still-present selection, otherwise fall back to the first card (server
+  order puts the default first), otherwise `null` for an empty list. Functional so the
+  callback never closes over `selectedId`, which would re-fire the focus effect on every
+  load.
+- **`dismissAll` + `replace`, not a bare `replace`.** Replacing only the top of the stack
+  would leave `create-bet` sitting under home, so Back would re-enter the flow with params
+  already spent on a bet.
+- **Success uses React Native's `Alert`** (`cancelable: false`, OK navigates). There is no
+  toast library here and adding a dependency for one confirmation is out of scope.
+- **`ScrollView` + `.map()`, where the wallet uses a `FlatList`** — the one deliberate
+  divergence. A `FlatList` nested in a `ScrollView` warns about nested virtualisation, and
+  a saved-card count is inherently small. `ScreenContainer` does not scroll, and summary +
+  cards + actions overflows a small screen at large system type.
+- **`isGoalType` narrows the param, rather than a cast.** `createBet` takes the `GoalType`
+  union; a cast is exactly what the deep-link re-validation exists to avoid.
+  `goalTypeLabel` stays the display path. The two `GoalType` unions (`src/domain/bet` and
+  `src/services/bets`) are structurally identical string unions, so the domain value flows
+  in without conversion — if they ever diverge, this is where it breaks.
+- An Active Bet / dashboard screen is out of scope; success lands on the `home` stub.
 
 ## (app)/wallet.tsx — saved cards, and adding one
 
@@ -141,7 +189,11 @@ token to `addPaymentMethod`. First consumer of `src/services/paymentMethods.ts`.
 - `src/domain/bet`, `src/domain/betForm` — goal-type enum, bounds, parsing/formatting.
 - `src/domain/paymentMethod` — card brand/mask/accessibility-label display rules.
 - `src/services/paymentMethods`, `src/services/mercadoPago` — the wallet's data and
-  tokenisation layers.
+  tokenisation layers; `paymentMethods` is also step 2's card list.
+- `src/services/bets` — `createBet`/`getActiveBet`/`describeBetError`, used by
+  `(app)/create-bet-payment.tsx`.
+- `src/services/apiClient` — `ApiError`/`NetworkError`, which step 2 switches on to pick a
+  recovery action (the *copy* still comes from `describe*Error`).
 - `src/hooks/useAuth` — the `AuthProvider`/`useAuth` pair both guards read.
 - `src/hooks/useGoogleSignIn`, `src/services/authService` — the two social sign-in flows.
 - `src/components/ScreenContainer`, `SplashScreenFallback`, `SocialSignInButton`,

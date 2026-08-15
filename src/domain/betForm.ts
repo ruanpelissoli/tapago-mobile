@@ -113,7 +113,34 @@ export function parseStakeCentsParam(text: string): number | null {
 }
 
 /**
+ * `5000` → `"50.00"`; `100000` → `"1000.00"`.
+ *
+ * The **wire** format for `stake_amount_brl`, and the deliberate mirror image of
+ * `formatCentsAsBrl`, which is display-only: a dot separator, always two
+ * decimals, no thousands grouping and no `R$`. Sending `R$ 1.000,00` to
+ * `POST /v1/bets` is a `400`.
+ *
+ * Built with integer arithmetic on the split parts for the same reason as
+ * `parseStakeCents` — `cents / 100` reintroduces the binary-float error the
+ * centavos representation exists to avoid.
+ *
+ * Money crosses the wire as a **string**, never a `number`: binary floats cannot
+ * represent centavos exactly, and this is the one field a user would notice
+ * being off by a cent.
+ */
+export function centsToApiAmount(cents: number): string {
+  const safeCents = Number.isFinite(cents) ? Math.max(0, Math.round(cents)) : 0;
+
+  const whole = String(Math.floor(safeCents / 100));
+  const fraction = String(safeCents % 100).padStart(2, '0');
+
+  return `${whole}.${fraction}`;
+}
+
+/**
  * `100000` → `R$ 1.000,00`.
+ *
+ * Display only — see `centsToApiAmount` for the value the API accepts.
  *
  * Grouping and the decimal mark are applied by hand: Hermes ships without the
  * full ICU locale data, so `Intl.NumberFormat('pt-BR')` cannot be relied on to

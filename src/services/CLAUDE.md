@@ -245,7 +245,10 @@ and the copy mapper `describeBetError`.
   *you already have a bet*. Neither may be flattened into a generic failure message.
 
 ### Dependencies
-`apiClient.ts` only. Intended consumers are the bet-creation and dashboard screens.
+`apiClient.ts` only. Consumed by `app/(app)/create-bet-payment.tsx`, which implements the
+non-idempotent-recovery rule below: on `503` or `NetworkError` it calls `getActiveBet()`
+to reconcile instead of re-calling `createBet`, and only offers a retry when that comes
+back `null`. The dashboard screen is the other intended consumer.
 
 ### Gotchas
 - **`createBet` is not idempotent — never blind-retry it.** A `503` leaves the bet
@@ -280,7 +283,9 @@ and the copy mapper `describeBetError`.
 - Responses never contain `mp_card_token` or `mp_customer_id`; nothing here reads them.
 
 ### Dependencies
-`apiClient.ts` only. Consumed by `app/(app)/wallet.tsx`; the bet-creation flow is next.
+`apiClient.ts` only. Consumed by `app/(app)/wallet.tsx` (list + add) and
+`app/(app)/create-bet-payment.tsx` (list only — step 2 of the create-bet flow picks the
+card the stake is held on, and sends the user to the wallet to add one).
 
 ### Gotchas
 - `addPaymentMethod` can return `503` when the provider is unavailable — distinct from a

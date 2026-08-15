@@ -18,6 +18,21 @@ and formatting are one testable place rather than logic smeared across JSX.
   conversion with integer arithmetic on the split string parts, because
   `parseFloat('10.55') * 100` is `1054.9999…`. The centavos value is what crosses the
   router-param boundary; formatting back to `R$ 10,55` is a display concern only.
+- **Two formatters, and they are not interchangeable.** `formatCentsAsBrl` is
+  **display-only** (`R$ 1.000,00` — grouping, comma). `centsToApiAmount` is the **wire**
+  format for `stake_amount_brl` (`"1000.00"` — dot, always two decimals, no grouping, no
+  `R$`). Sending the display string to `POST /v1/bets` is a `400`, so the mirror-image
+  pair exists to make the right one obvious at a call site. Both build the string with
+  integer arithmetic on the split parts for the `parseStakeCents` reason — `cents / 100`
+  reintroduces exactly the binary-float error centavos exist to avoid.
+- **Money crosses the wire as a `string`, never a `number`.** `createBet` types
+  `stakeAmountBrl` as a string for the same reason the API sends one back; a `number`
+  there would put a rounding error in the one field a user is guaranteed to notice.
+- **`isGoalType` is the narrowing counterpart to `goalTypeLabel`.** Both take a raw
+  string (a router param, typically); the label one answers "what do I show?" and the type
+  guard answers "may this be sent as `goal_type`?". `create-bet-payment.tsx` needs the
+  guard because `createBet` takes the `GoalType` union and a cast would defeat the
+  deep-link re-validation. There is deliberately no third `parseGoalType` helper.
 - **Parsers return `null`, never `NaN`.** Each is gated by a regex before any numeric
   conversion, so `parseInt('')`, `Number('.')` and friends are unreachable. `null` means
   "not a valid value (yet)"; a caller that forgets to handle it gets a TypeScript error
@@ -75,7 +90,8 @@ the point. Consumed by `app/(app)/create-bet.tsx`, `app/(app)/create-bet-payment
 - There is no test runner in this project yet. These functions are pure and have no
   imports to mock, so they are the **first thing to unit-test** when one lands — the edge
   cases worth covering are `''`, `'007'`, a lone `,`, `'10.'`, `'10,555'`, `'0,99'` and
-  `'1000,01'`.
+  `'1000,01'`. For `centsToApiAmount`: `100` → `"1.00"`, `5000` → `"50.00"`, `100000` →
+  `"1000.00"`, plus `0`, a non-integer and a negative (all clamped, never `NaN`).
 - `sanitizeTargetDaysInput` truncates rather than rejects: typing `3650` leaves `365`.
   That is intentional (the field cannot exceed 3 digits) but means the visible value can
   differ from the last keystroke.

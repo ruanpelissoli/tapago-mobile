@@ -13,9 +13,9 @@ const DEFAULT_API_BASE_URL = 'http://localhost:5000';
  * values on top of it. Expo automatically loads `.env` before evaluating this
  * module, so `process.env.EXPO_PUBLIC_*` is populated here.
  *
- * Google client IDs default to `''` rather than being omitted, so
- * `src/services/env.ts` always sees a string and can treat "empty" as
- * "not configured" without null-checking the manifest.
+ * Google client IDs and the Mercado Pago public key default to `''` rather than
+ * being omitted, so `src/services/env.ts` always sees a string and can treat
+ * "empty" as "not configured" without null-checking the manifest.
  */
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
@@ -27,5 +27,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     googleIosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? '',
     googleAndroidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? '',
     googleWebClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '',
+    // Mercado Pago *public* key (`APP_USR-…` / `TEST-…`). Safe to ship — it can
+    // only tokenise a card. The server-side MERCADOPAGO_ACCESS_TOKEN is a
+    // secret and must never appear here.
+    mercadoPagoPublicKey: process.env.EXPO_PUBLIC_MERCADO_PAGO_PUBLIC_KEY ?? '',
   },
 });

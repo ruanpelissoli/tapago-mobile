@@ -65,12 +65,39 @@ export const GOOGLE_WEB_CLIENT_ID = readString(
 export const GOOGLE_SIGN_IN_ENABLED =
   GOOGLE_IOS_CLIENT_ID !== '' || GOOGLE_ANDROID_CLIENT_ID !== '' || GOOGLE_WEB_CLIENT_ID !== '';
 
+/**
+ * Mercado Pago *public* key (`APP_USR-…` in production, `TEST-…` in sandbox).
+ *
+ * Public by design: it is what the browser SDK uses to tokenise a card, and it
+ * cannot move money or read an account. The server-side counterpart
+ * (`MERCADOPAGO_ACCESS_TOKEN`) is a secret and must **never** reach this app —
+ * it belongs to the API only.
+ *
+ * Empty means "card entry is not configured for this build". See
+ * `MERCADO_PAGO_ENABLED`.
+ */
+export const MERCADO_PAGO_PUBLIC_KEY = readString(
+  'mercadoPagoPublicKey',
+  process.env.EXPO_PUBLIC_MERCADO_PAGO_PUBLIC_KEY,
+  '',
+);
+
+/**
+ * Whether a Mercado Pago public key is configured.
+ *
+ * The wallet screen disables "Add card" and explains why when this is `false`,
+ * rather than opening a form whose only possible outcome is an SDK error.
+ */
+export const MERCADO_PAGO_ENABLED = MERCADO_PAGO_PUBLIC_KEY !== '';
+
 export const env = {
   apiBaseUrl: API_BASE_URL,
   googleIosClientId: GOOGLE_IOS_CLIENT_ID,
   googleAndroidClientId: GOOGLE_ANDROID_CLIENT_ID,
   googleWebClientId: GOOGLE_WEB_CLIENT_ID,
   googleSignInEnabled: GOOGLE_SIGN_IN_ENABLED,
+  mercadoPagoPublicKey: MERCADO_PAGO_PUBLIC_KEY,
+  mercadoPagoEnabled: MERCADO_PAGO_ENABLED,
 } as const;
 
 export default env;

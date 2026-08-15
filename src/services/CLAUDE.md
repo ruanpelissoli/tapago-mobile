@@ -10,12 +10,13 @@ device storage.
 - `sessionStorage.ts` — persists the auth session to `expo-secure-store`.
 - `bets.ts` — create and read the user's one in-flight bet.
 - `paymentMethods.ts` — save and list tokenised cards.
+- `mercadoPago.ts` — the card-entry page and bridge protocol used to tokenise a card.
 
 ## env.ts
 
 ### Purpose
-Resolves runtime configuration into typed constants: `API_BASE_URL` and the three Google
-OAuth client IDs.
+Resolves runtime configuration into typed constants: `API_BASE_URL`, the three Google
+OAuth client IDs, and `MERCADO_PAGO_PUBLIC_KEY`.
 
 ### How the value flows
 `.env` → `app.config.ts` (`extra.apiBaseUrl`) → app manifest → `expo-constants` → here.
@@ -40,6 +41,15 @@ and layers on the environment-derived `extra` block.
   build shows no dead control. It is deliberately *not* per-platform:
   `expo-auth-session` falls back to the web client ID when a native one is missing,
   which is the documented Expo Go path.
+- **`MERCADO_PAGO_PUBLIC_KEY` is the *public* key** (`TEST-…` in sandbox, `APP_USR-…` in
+  production). It is designed to be embedded in a client — all it can do is exchange card
+  details for a single-use token. Its server-side counterpart,
+  `MERCADOPAGO_ACCESS_TOKEN`, is a **secret that belongs to the API only** and must never
+  appear in `.env`, `app.config.ts` or anywhere in this repo. The `mercadopago` npm
+  package is the server SDK for exactly that reason and is deliberately not a dependency.
+- **Empty means "card entry is not configured"**, and `MERCADO_PAGO_ENABLED` derives from
+  it — the wallet disables "Add card" with an explanation rather than opening a form that
+  can only fail. Same shape as `GOOGLE_SIGN_IN_ENABLED`.
 
 ### Business logic / invariants
 - `API_BASE_URL` never ends in `/`.
@@ -48,8 +58,8 @@ and layers on the environment-derived `extra` block.
 - `.env` is gitignored; `.env.example` is the committed documentation of what's needed.
 
 ### Dependencies
-`expo-constants`, and `app.config.ts` at the repo root. Consumed by `apiClient.ts` and
-`useGoogleSignIn.ts`.
+`expo-constants`, and `app.config.ts` at the repo root. Consumed by `apiClient.ts`,
+`useGoogleSignIn.ts` and `app/(app)/wallet.tsx`.
 
 ### Gotchas
 - Editing `.env` requires restarting the dev server with a cleared cache
@@ -270,10 +280,64 @@ and the copy mapper `describeBetError`.
 - Responses never contain `mp_card_token` or `mp_customer_id`; nothing here reads them.
 
 ### Dependencies
-`apiClient.ts` only. Intended consumers are the card-management and bet-creation screens.
+`apiClient.ts` only. Consumed by `app/(app)/wallet.tsx`; the bet-creation flow is next.
 
 ### Gotchas
 - `addPaymentMethod` can return `503` when the provider is unavailable — distinct from a
   validation `400`, and the user should be told to retry rather than fix their card.
 - The card token is single-use. A failed `addPaymentMethod` cannot be retried with the
   same token; the screen must re-collect through the SDK.
+
+## mercadoPago.ts
+
+### Purpose
+Owns the card-entry web page and the message protocol it speaks: `buildCardFormHtml`,
+`parseBridgeMessage`, `buildSetSavingScript`, `buildFailAfterTokenScript`, and the
+SDK/base URLs. Rendered by `src/components/MercadoPagoCardForm.tsx`.
+
+### Key decisions
+- **Tokenisation happens in a WebView running MP's browser SDK v2, not in RN.** That is
+  what keeps a raw PAN or CVV out of JS state, logs and crash reports, and therefore out
+  of PCI scope. The `mercadopago` npm package is the *server* SDK — adding it would put a
+  secret access token in the shipped bundle, so it is deliberately not a dependency.
+- **No React and no `react-native-webview` import here.** Strings in, strings out: the
+  page generator and the parser are pure, so they are directly unit-testable and the
+  component stays rendering-only.
+- **`MP_BASE_URL` as the WebView `baseUrl` is load-bearing.** With the default
+  `about:blank` origin Android refuses to run the remote SDK script and blocks its XHRs,
+  and the form silently never initialises. Do not remove it as "unused config".
+- **The public key goes through `JSON.stringify`** into the page script, so it cannot
+  break out of the literal.
+- **Page CSS is interpolated from `src/theme`**, so there is still one source of truth for
+  colour and metrics and no hex literal is hand-typed into the HTML.
+- **Brand comes from MP's own BIN lookup** (`getPaymentMethods({ bin })` →
+  `payment_method_id`), with a small local prefix table as fallback so a flaky lookup
+  cannot block an otherwise valid card.
+
+### Business logic / invariants
+- **The bridge carries exactly three card-related values: `cardToken`, `lastFour`,
+  `cardBrand`.** The PAN, CVV, expiry and CPF must never appear in a `postMessage`
+  payload, and nothing from the bridge is ever logged. This is the whole point of the
+  module — a "convenient" fourth field undoes it.
+- Three message types only: `ready` (SDK initialised), `token` (success) and `error`
+  (**fatal init failure** — the SDK never loaded or the key was rejected). Ordinary
+  validation and card-declined failures are rendered *inside* the page, so the user keeps
+  their typing and no card data has to leave the WebView to produce a message.
+- `parseBridgeMessage` narrows with explicit `typeof` checks and returns `null` for
+  anything unrecognised. A WebView message is untrusted input — a redirected page could
+  post anything — so nothing is cast.
+- MP reports field problems as `cause[].code`; the raw descriptions are provider
+  internals in Spanish/Portuguese, so known codes map to English copy in-page.
+- Mercado Pago Brazil requires an **identification (CPF)** alongside name/number/expiry/
+  CVV to issue a card token. Dropping that field breaks tokenisation outright.
+
+### Dependencies
+`src/theme` only. Consumed by `src/components/MercadoPagoCardForm.tsx`.
+
+### Gotchas
+- The generated page is a TS template literal. **Every regex backslash must be doubled**
+  (`\D` in a template literal collapses to `D`), which is why the page's regexes use
+  `[^0-9]` instead. Same for `${` — use string concatenation inside the page script.
+- The token is single-use *and* short-lived. `buildFailAfterTokenScript` exists precisely
+  because a save failure after tokenisation is unrecoverable: it clears the card fields
+  and asks for re-entry rather than resubmitting a spent token.

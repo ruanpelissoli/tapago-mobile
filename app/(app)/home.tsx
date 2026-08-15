@@ -16,6 +16,10 @@ export default function HomeScreen() {
     router.push('/(app)/create-bet');
   }, []);
 
+  const handleWallet = useCallback(() => {
+    router.push('/(app)/wallet');
+  }, []);
+
   return (
     <ScreenContainer centered testID="home-screen">
       <Text style={styles.title} accessibilityRole="header">
@@ -25,6 +29,7 @@ export default function HomeScreen() {
 
       <View style={styles.actions}>
         <PrimaryButton label="Create bet" onPress={handleCreateBet} testID="home-create-bet-button" />
+        <PrimaryButton label="Payment methods" onPress={handleWallet} testID="home-wallet-button" />
       </View>
     </ScreenContainer>
   );
@@ -47,5 +52,6 @@ const styles = StyleSheet.create({
   actions: {
     alignSelf: 'stretch',
     marginTop: spacing.lg,
+    gap: spacing.sm,
   },
 });
